@@ -1,0 +1,570 @@
+//
+//  OnboardingView.swift
+//  Mapped
+//
+//  Created by Noval, Cameron on 11/17/25.
+//
+
+import Foundation
+import SwiftUI
+import Photos
+
+struct OnboardingView: View {
+    @Binding var hasCompletedOnboarding: Bool
+    @State private var currentPage = 0
+    @State private var showLoadingScreen = false
+    
+    var body: some View {
+        ZStack {
+            if !showLoadingScreen {
+                // Background gradient
+                LinearGradient(
+                    colors: [Color.blue.opacity(0.3), Color.purple.opacity(0.3)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+                
+                VStack(spacing: 0) {
+                    // Page content
+                    TabView(selection: $currentPage) {
+                        OnboardingPage1()
+                            .tag(0)
+                        
+                        OnboardingPage2()
+                            .tag(1)
+                        
+                        OnboardingPage3(onContinue: {
+                            showLoadingScreen = true
+                        })
+                        .tag(2)
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: .always))
+                    .indexViewStyle(.page(backgroundDisplayMode: .always))
+                }
+            } else {
+
+                PhotoLoadingScreen(hasCompletedOnboarding: $hasCompletedOnboarding)
+            }
+        }
+    }
+}
+
+// MARK: - Page 1: Welcome
+
+struct OnboardingPage1: View {
+    var body: some View {
+        VStack(spacing: 40) {
+            Spacer()
+            
+            // App icon/logo
+            ZStack {
+                Circle()
+                    .fill(Color.blue.opacity(0.2))
+                    .frame(width: 120, height: 120)
+                
+                Image(systemName: "map.fill")
+                    .font(.system(size: 60))
+                    .foregroundColor(.blue)
+            }
+            
+            VStack(spacing: 15) {
+                Text("Welcome to")
+                    .font(.title2)
+                    .foregroundColor(.secondary)
+                
+                Text("2025 Mapped")
+                    .font(.system(size: 44, weight: .bold))
+                    .multilineTextAlignment(.center)
+                
+                Text("Map your year in photos")
+                    .font(.title3)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+            }
+            
+            Spacer()
+            
+            // Swipe indicator
+            VStack(spacing: 8) {
+                Image(systemName: "chevron.right")
+                    .font(.title2)
+                    .foregroundColor(.blue)
+                Text("Swipe to continue")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.bottom, 40)
+        }
+        .padding()
+    }
+}
+
+// MARK: - Page 2: Privacy
+
+struct OnboardingPage2: View {
+    var body: some View {
+        VStack(spacing: 40) {
+            Spacer()
+            
+            // Privacy icon
+            ZStack {
+                Circle()
+                    .fill(Color.green.opacity(0.2))
+                    .frame(width: 120, height: 120)
+                
+                Image(systemName: "lock.shield.fill")
+                    .font(.system(size: 60))
+                    .foregroundColor(.green)
+            }
+            
+            VStack(spacing: 15) {
+                Text("Privacy First")
+                    .font(.system(size: 36, weight: .bold))
+                
+                Text("Your photos never leave your device")
+                    .font(.title3)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+            }
+            
+            // Feature list
+            VStack(alignment: .leading, spacing: 20) {
+                PrivacyFeatureRow(
+                    icon: "iphone",
+                    text: "All processing happens on your device"
+                )
+                
+                PrivacyFeatureRow(
+                    icon: "network.slash",
+                    text: "No data sent to servers"
+                )
+                
+                PrivacyFeatureRow(
+                    icon: "location.fill",
+                    text: "GPS data stays private"
+                )
+            }
+            .padding(.horizontal, 40)
+            
+            Spacer()
+            
+            // Swipe indicator
+            VStack(spacing: 8) {
+                Image(systemName: "chevron.right")
+                    .font(.title2)
+                    .foregroundColor(.blue)
+                Text("Swipe to continue")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.bottom, 40)
+        }
+        .padding()
+    }
+}
+
+struct PrivacyFeatureRow: View {
+    let icon: String
+    let text: String
+    
+    var body: some View {
+        HStack(spacing: 15) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundColor(.green)
+                .frame(width: 30)
+            
+            Text(text)
+                .font(.body)
+                .foregroundColor(.primary)
+            
+            Spacer()
+        }
+    }
+}
+
+// MARK: - Page 3: Permission
+
+struct OnboardingPage3: View {
+    let onContinue: () -> Void
+    @State private var showPermissionAlert = false
+    
+    var body: some View {
+        VStack(spacing: 40) {
+            Spacer()
+            
+            // Photo icon
+            ZStack {
+                Circle()
+                    .fill(Color.orange.opacity(0.2))
+                    .frame(width: 120, height: 120)
+                
+                Image(systemName: "photo.stack.fill")
+                    .font(.system(size: 60))
+                    .foregroundColor(.orange)
+            }
+            
+            VStack(spacing: 15) {
+                Text("Access Your Photos")
+                    .font(.system(size: 36, weight: .bold))
+                
+                Text("We'll analyze GPS data from your 2025 photos to create your year map")
+                    .font(.title3)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+            }
+            
+            // What we'll show
+            VStack(alignment: .leading, spacing: 20) {
+                InfoRow(
+                    icon: "map",
+                    title: "Interactive Map",
+                    description: "See everywhere you've been"
+                )
+                
+                InfoRow(
+                    icon: "chart.bar",
+                    title: "Statistics",
+                    description: "Distance, places, highlights"
+                )
+                
+                InfoRow(
+                    icon: "sparkles",
+                    title: "Constellation View",
+                    description: "Your journey as stars"
+                )
+            }
+            .padding(.horizontal, 30)
+            
+            Spacer()
+            
+            // Continue button
+            Button(action: handleGetStarted) {
+                HStack {
+                    Text("Get Started")
+                        .font(.headline)
+                    Image(systemName: "arrow.right")
+                }
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(
+                    LinearGradient(
+                        colors: [Color.blue, Color.blue.opacity(0.8)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .cornerRadius(15)
+            }
+            .padding(.horizontal, 40)
+            .padding(.bottom, 40)
+        }
+        .padding()
+        .alert("Photo Access Required", isPresented: $showPermissionAlert) {
+            Button("Open Settings") {
+                if let settingsURL = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(settingsURL)
+                }
+            }
+            Button("Try Again") {
+                handleGetStarted()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Please grant access to your photo library to use this app. You can change this in Settings.")
+        }
+    }
+    
+    private func handleGetStarted() {
+        // Request photo permission
+        PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
+            DispatchQueue.main.async {
+                switch status {
+                case .authorized, .limited:
+                    onContinue()
+                    
+                case .denied, .restricted:
+                    // Show alert to go to settings
+                    showPermissionAlert = true
+                    
+                case .notDetermined:
+                    // This shouldn't happen, but handle it
+                    showPermissionAlert = true
+                    
+                @unknown default:
+                    showPermissionAlert = true
+                }
+            }
+        }
+    }
+}
+
+struct InfoRow: View {
+    let icon: String
+    let title: String
+    let description: String
+    
+    var body: some View {
+        HStack(alignment: .top, spacing: 15) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundColor(.blue)
+                .frame(width: 30)
+            
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                
+                Text(description)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            
+            Spacer()
+        }
+    }
+}
+
+// MARK: - Photo Loading Screen
+struct PhotoLoadingScreen: View {
+    @Binding var hasCompletedOnboarding: Bool
+    @StateObject private var photoLoader = PhotoLoader()
+    @State private var loadingPhase: LoadingPhase = .starting
+    @State private var showCarousel = false
+    @State private var fakeProgress: Double = 0.0
+    @State private var useFakeProgress = true
+    @State private var progressTimer: Timer?
+    
+    enum LoadingPhase {
+        case starting
+        case loadingPhotos
+        case findingLocations
+        case analyzingJourney
+        case creatingStory
+        case complete
+        
+        var message: String {
+            switch self {
+            case .starting: return "Getting started..."
+            case .loadingPhotos: return "Loading your photos..."
+            case .findingLocations: return "Finding your locations..."
+            case .analyzingJourney: return "Analyzing your journey..."
+            case .creatingStory: return "Creating your story..."
+            case .complete: return "Ready!"
+            }
+        }
+        
+        var progress: Double {
+            switch self {
+            case .starting: return 0.0
+            case .loadingPhotos: return 0.2
+            case .findingLocations: return 0.4
+            case .analyzingJourney: return 0.6
+            case .creatingStory: return 0.8
+            case .complete: return 1.0
+            }
+        }
+    }
+    
+    // Computed property that blends fake and real progress
+    private var displayProgress: Double {
+        if useFakeProgress {
+            return fakeProgress
+        } else {
+            // Use min to avoid jumping forward - show whichever is lower
+            return min(fakeProgress, photoLoader.loadingProgress)
+        }
+    }
+    
+    var body: some View {
+        ZStack {
+            // Background gradient
+            LinearGradient(
+                colors: [Color.blue.opacity(0.3), Color.purple.opacity(0.3)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+            
+            if !showCarousel {
+                VStack(spacing: 40) {
+                    Spacer()
+                    
+                    // Animated icon
+                    ZStack {
+                        Circle()
+                            .fill(Color.white.opacity(0.2))
+                            .frame(width: 120, height: 120)
+                        
+                        Image(systemName: loadingPhase == .complete ? "checkmark.circle.fill" : "map.fill")
+                            .font(.system(size: 60))
+                            .foregroundColor(.white)
+                            .scaleEffect(loadingPhase == .complete ? 1.1 : 1.0)
+                            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: loadingPhase)
+                    }
+                    
+                    VStack(spacing: 15) {
+                        Text(loadingPhase.message)
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                            .id(loadingPhase) // Force text to animate smoothly
+                            .transition(.opacity)
+                        
+                        // Progress bar
+                        ProgressView(value: displayProgress)
+                            .progressViewStyle(LinearProgressViewStyle(tint: .white))
+                            .frame(width: 250)
+                        
+                        Text("\(Int(displayProgress * 100))%")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                    
+                    Spacer()
+                    
+                    // Fun loading messages
+                    Text(getLoadingTip())
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.7))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 50)
+                        .padding(.bottom, 40)
+                }
+            } else {
+                // Show carousel when loading complete
+                YearStoryCarousel(
+                    photoLoader: photoLoader,
+                    hasCompletedOnboarding: $hasCompletedOnboarding,
+                    selectedFeature: .constant(nil),
+                    isHomeMenu: .constant(true)
+                )
+            }
+        }
+        .onAppear {
+            startFakeProgress()
+            loadPhotos()
+        }
+        .onDisappear {
+            progressTimer?.invalidate()
+        }
+        .onChange(of: displayProgress) { newValue in
+            updateLoadingPhase(progress: newValue)
+        }
+        .onChange(of: photoLoader.isLoading) { isLoading in
+            if !isLoading && !photoLoader.locations.isEmpty {
+                // Ensure we show complete state first
+                DispatchQueue.main.async {
+                    self.loadingPhase = .complete
+                }
+                
+                // Then transition to carousel
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    withAnimation(.spring(response: 0.6)) {
+                        showCarousel = true
+                    }
+                }
+            }
+        }
+        .onChange(of: photoLoader.locations.count) { newValue in
+            if newValue > 0 && !showCarousel {
+                print("Detected \(newValue) locations loaded")
+                
+                // Force completion state
+                DispatchQueue.main.async {
+                    self.loadingPhase = .complete
+                }
+                
+                // Transition to carousel
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    withAnimation(.spring(response: 0.6)) {
+                        showCarousel = true
+                    }
+                }
+            }
+        }
+    }
+    // Increment progress gradually using a timer just because it automatically starts at 80% and is slow from there,
+    // which might be jarring to the user
+    private func startFakeProgress() {
+        // Increment progress gradually using a timer
+        let updateInterval: Double = 0.05 // Update every 50ms
+        
+        progressTimer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { timer in
+            DispatchQueue.main.async {
+                if self.useFakeProgress {
+                    // Fast progress for first 5 seconds (0 to 0.7)
+                    let fastIncrement: Double = (0.7 / 5.0) * updateInterval
+                    if self.fakeProgress < 0.7 {
+                        self.fakeProgress += fastIncrement
+                    } else {
+                        // Switch to real progress mode
+                        self.useFakeProgress = false
+                    }
+                } else {
+                    // Slow progress after 5 seconds (continue incrementing to avoid being stuck)
+                    let slowIncrement: Double = 0.002 // Very slow increment
+                    if self.fakeProgress < 1.0 {
+                        self.fakeProgress += slowIncrement
+                    }
+                    
+                    // Stop timer when we hit 100%
+                    if self.fakeProgress >= 1.0 {
+                        timer.invalidate()
+                    }
+                }
+            }
+        }
+    }
+
+    
+    private func loadPhotos() {
+        photoLoader.checkPhotoLibraryPermission()
+    }
+    
+    private func updateLoadingPhase(progress: Double) {
+        withAnimation(.easeInOut(duration: 0.3)) {
+            if progress < 0.2 {
+                loadingPhase = .loadingPhotos
+            } else if progress < 0.4 {
+                loadingPhase = .findingLocations
+            } else if progress < 0.6 {
+                loadingPhase = .analyzingJourney
+            } else if progress < 0.8 {
+                loadingPhase = .creatingStory
+            } else if progress >= 1.0 {
+                loadingPhase = .complete
+            } else {
+                // Stay on creatingStory between 0.8 and 1.0
+                loadingPhase = .creatingStory
+            }
+        }
+    }
+    
+    private func getLoadingTip() -> String {
+        let tips = [
+            "✨ Your photos are processed entirely on your device",
+            "🔒 No data ever leaves your phone",
+            "🌍 We're mapping your entire year",
+            "⭐ Creating something special for you",
+            "📸 Analyzing GPS data from your photos",
+            "🗺️ Building your personal journey map"
+        ]
+        
+        let tipIndex = Int(displayProgress * Double(tips.count - 1))
+        return tips[min(tipIndex, tips.count - 1)]
+    }
+}
+
+// MARK: - Preview
+
+struct OnboardingView_Previews: PreviewProvider {
+    static var previews: some View {
+        OnboardingView(hasCompletedOnboarding: .constant(false))
+    }
+}
