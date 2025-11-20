@@ -2,22 +2,18 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- REQUIRED: Photo Library Access -->
     <key>NSPhotoLibraryUsageDescription</key>
     <string>Mapped needs access to your photos to create an interactive map of your year based on photo locations and dates.</string>
-    
-    <!-- REQUIRED: Location (from photos) -->
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>Mapped uses location data from your photos to map your journey throughout the year.</string>
-    
-    <!-- App Support & Privacy URLs -->
     <key>NSAppSupportURL</key>
     <string>https://gist.githubusercontent.com/camnoval/a3338a1bd813eee7b7caae65cc47568a/raw</string>
-    
     <key>NSPrivacyPolicyURL</key>
     <string>https://gist.githubusercontent.com/camnoval/ff4af5473e03078d2b3a8cdf57ec2905/raw</string>
-    
-    <!-- File Type Handling -->
+    <key>UIDeviceFamily</key>
+    <array>
+        <integer>1</integer>
+    </array>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>
@@ -37,8 +33,6 @@
             <false/>
         </dict>
     </array>
-    
-    <!-- URL Scheme -->
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
@@ -52,19 +46,13 @@
             </array>
         </dict>
     </array>
-    
-    <!-- Security -->
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>
         <false/>
     </dict>
-    
-    <!-- File Sharing -->
     <key>UIFileSharingEnabled</key>
     <false/>
-    
-    <!-- Exported Type Declarations -->
     <key>UTExportedTypeDeclarations</key>
     <array>
         <dict>
@@ -95,8 +83,6 @@
             </dict>
         </dict>
     </array>
-    
-    <!-- Imported Type Declarations -->
     <key>UTImportedTypeDeclarations</key>
     <array>
         <dict>

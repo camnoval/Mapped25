@@ -616,7 +616,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Mapped/Mapped.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_ASSET_PATHS = "\"Mapped/Preview Content\"";
 				DEVELOPMENT_TEAM = 9VZ2M528HD;
 				ENABLE_PREVIEWS = YES;
@@ -625,10 +625,9 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Mapped 25";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "2025 Mapped can center the map on your current location for easier navigation. This is optional and only used when viewing maps.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Mapped uses location data from your photos to map your journey throughout the year.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "2025 Mapped can save your generated journey videos and map images to your Photos library so you can easily share them with friends and family. Your original photos are never modified or deleted.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "2025 Mapped analyzes GPS location data from your 2025 photos to create an interactive map showing where you've been throughout the year. Your photos are processed entirely on your device and never uploaded to any server. This access is essential for the app's core functionality of visualizing your year in locations.";
-				INFOPLIST_KEY_NSUserTrackingUsageDescription = "This app does not track you. We respect your privacy and process all data locally on your device.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Mapped needs access to your photos to create an interactive map of your year based on photo locations and dates.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -640,12 +639,16 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 4;
 				PRODUCT_BUNDLE_IDENTIFIER = NovalCo.Mapped25;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Debug;
 		};
@@ -656,7 +659,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Mapped/Mapped.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_ASSET_PATHS = "\"Mapped/Preview Content\"";
 				DEVELOPMENT_TEAM = 9VZ2M528HD;
 				ENABLE_PREVIEWS = YES;
@@ -665,10 +668,9 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Mapped 25";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "2025 Mapped can center the map on your current location for easier navigation. This is optional and only used when viewing maps.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Mapped uses location data from your photos to map your journey throughout the year.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "2025 Mapped can save your generated journey videos and map images to your Photos library so you can easily share them with friends and family. Your original photos are never modified or deleted.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "2025 Mapped analyzes GPS location data from your 2025 photos to create an interactive map showing where you've been throughout the year. Your photos are processed entirely on your device and never uploaded to any server. This access is essential for the app's core functionality of visualizing your year in locations.";
-				INFOPLIST_KEY_NSUserTrackingUsageDescription = "This app does not track you. We respect your privacy and process all data locally on your device.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Mapped needs access to your photos to create an interactive map of your year based on photo locations and dates.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -680,12 +682,16 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 4;
 				PRODUCT_BUNDLE_IDENTIFIER = NovalCo.Mapped25;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Release;
 		};
@@ -694,11 +700,11 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 9VZ2M528HD;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.5;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 4;
 				PRODUCT_BUNDLE_IDENTIFIER = NovalCo.MappedTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -713,11 +719,11 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 9VZ2M528HD;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.5;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 4;
 				PRODUCT_BUNDLE_IDENTIFIER = NovalCo.MappedTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -731,10 +737,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 9VZ2M528HD;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 4;
 				PRODUCT_BUNDLE_IDENTIFIER = NovalCo.MappedUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -748,10 +754,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 9VZ2M528HD;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 4;
 				PRODUCT_BUNDLE_IDENTIFIER = NovalCo.MappedUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -766,7 +772,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = MappedPreview/MappedPreview.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 9VZ2M528HD;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = MappedPreview/Info.plist;
@@ -778,7 +784,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 4;
 				PRODUCT_BUNDLE_IDENTIFIER = NovalCo.Mapped25.MappedPreview;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -793,7 +799,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = MappedPreview/MappedPreview.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 9VZ2M528HD;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = MappedPreview/Info.plist;
@@ -805,7 +811,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 4;
 				PRODUCT_BUNDLE_IDENTIFIER = NovalCo.Mapped25.MappedPreview;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;

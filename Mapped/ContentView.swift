@@ -343,7 +343,7 @@ struct ContentView: View {
                 longestGap = max(longestGap, gap)
             }
             let days = Int(longestGap / 86400)
-            stats["Longest Gap Between Traveling Locations"] = "\(days) days"
+            stats["Longest Gap Between Traveling"] = "\(days) days"
         }
         
         return stats
