@@ -81,6 +81,7 @@ class VideoExporter: ObservableObject {
             self.isExporting = true
             self.exportProgress = 0.0
             self.exportError = nil
+            self.exportedVideoURL = nil 
         }
         
         
@@ -119,11 +120,56 @@ class VideoExporter: ObservableObject {
             }
             
             // Load photos from cache on background thread
+            // Load photos from cache on background thread
             if loadPhotosFromCache {
                 print("📸 Loading cached photos for video export...")
                 
                 // Load photos from disk (happens on background thread already)
                 if let cached = PersistenceManager.shared.loadCachedVideoPhotos() {
+                    // CRITICAL: Validate cache isn't empty
+                    if cached.isEmpty {
+                        print("⚠️ Cached video photos are empty, falling back to library load")
+                        self.loadPhotosWithMetadata(timestamps: timestamps, locations: locations) {
+                            self.generateCollageLayout(timestamps: timestamps, locations: locations)
+                            self.prerenderPhotoTextures()
+                            
+                            if self.isCancelled {
+                                DispatchQueue.main.async {
+                                    self.isExporting = false
+                                    UIApplication.shared.endBackgroundTask(backgroundTask)
+                                }
+                                return
+                            }
+                            
+                            do {
+                                let videoURL = try self.createVideo(
+                                    locations: locations,
+                                    timestamps: timestamps,
+                                    statistics: statistics,
+                                    friends: friends
+                                )
+                                
+                                // âœ… CRITICAL: Clear photos from memory after export
+                                self.photoItems = []
+                                self.prerenderedPhotos = []
+                                self.collageLayout = []
+                                print("Cleared video photos from memory")
+                                
+                                finishSuccessfully(videoURL)
+                            } catch {
+                                // Clear memory even on error
+                                self.photoItems = []
+                                self.prerenderedPhotos = []
+                                self.collageLayout = []
+                                print("Cleared video photos from memory (after error)")
+                                
+                                finishWithError(error)
+                            }
+                        }
+                        return
+                    }
+                    
+                    // Cache is valid, use it
                     self.photoItems = cached
                     
                     DispatchQueue.main.async {
@@ -157,11 +203,11 @@ class VideoExporter: ObservableObject {
                             friends: friends
                         )
                         
-                        // ✅ CRITICAL: Clear photos from memory after export
+                        // âœ… CRITICAL: Clear photos from memory after export
                         self.photoItems = []
                         self.prerenderedPhotos = []
                         self.collageLayout = []
-                        print("🧹 Cleared video photos from memory")
+                        print("Cleared video photos from memory")
                         
                         finishSuccessfully(videoURL)
                     } catch {
@@ -169,14 +215,14 @@ class VideoExporter: ObservableObject {
                         self.photoItems = []
                         self.prerenderedPhotos = []
                         self.collageLayout = []
-                        print("🧹 Cleared video photos from memory (after error)")
+                        print("Cleared video photos from memory (after error)")
                         
                         finishWithError(error)
                     }
                     
                 } else {
                     // Fallback: load from library if cache doesn't exist
-                    print("⚠️ No cached photos found, loading from library...")
+                    print("No cached photos found, loading from library...")
                     self.loadPhotosWithMetadata(timestamps: timestamps, locations: locations) {
                         self.generateCollageLayout(timestamps: timestamps, locations: locations)
                         self.prerenderPhotoTextures()
@@ -278,9 +324,11 @@ class VideoExporter: ObservableObject {
             }
         }
 
-        // If under 200 photos, use all of them. Otherwise, limit to 3 per day
-        if selectedAssets.count <= 200 {
-            print("📸 Using all \(selectedAssets.count) photos for video (under 200 threshold)")
+        // UPDATED LOGIC:
+        // - If 400 or fewer photos: use all of them
+        // - If more than 400 photos: limit to 3 per day to spread across year
+        if selectedAssets.count <= 400 {
+            print("📸 Using all \(selectedAssets.count) photos for video (400 or under)")
             // Keep all photos, sorted by date
             selectedAssets.sort { ($0.creationDate ?? Date.distantPast) < ($1.creationDate ?? Date.distantPast) }
         } else {
@@ -309,8 +357,8 @@ class VideoExporter: ObservableObject {
             }
         }
 
-        // Load up to 200 photos with stride sampling
-        let maxPhotos = min(200, selectedAssets.count)
+        // Load up to 400 photos with stride sampling
+        let maxPhotos = min(400, selectedAssets.count)
         let step = max(1, selectedAssets.count / maxPhotos)
         
         var tempPhotos: [(image: UIImage, date: Date, location: CLLocation?)] = []
@@ -1052,18 +1100,21 @@ class VideoExporter: ObservableObject {
         guard !collageLayout.isEmpty, !prerenderedPhotos.isEmpty else { return }
         
         // Match the scaled values - use ResponsiveLayout to be consistent
-            let collageStartY: CGFloat = ResponsiveLayout.collageStartY
-            let collageHeight: CGFloat = ResponsiveLayout.collageHeight
-            let collageWidth = ResponsiveLayout.collageWidth
-            let collageX: CGFloat = ResponsiveLayout.collageX
-            let collageArea = CGRect(x: collageX, y: collageStartY, width: collageWidth, height: collageHeight)
-            
-            context.saveGState()
-            context.clip(to: collageArea)
+        let collageStartY: CGFloat = ResponsiveLayout.collageStartY
+        let collageHeight: CGFloat = ResponsiveLayout.collageHeight
+        let collageWidth = ResponsiveLayout.collageWidth
+        let collageX: CGFloat = ResponsiveLayout.collageX
+        let collageArea = CGRect(x: collageX, y: collageStartY, width: collageWidth, height: collageHeight)
+        
+        context.saveGState()
+        context.clip(to: collageArea)
         
         for (index, item) in collageLayout.enumerated() {
             guard item.appearTime <= progress else { continue }
-            guard index < prerenderedPhotos.count else { continue }
+            guard index < prerenderedPhotos.count else {
+                print("⚠️ Warning: Skipping photo at index \(index) - out of bounds (prerenderedPhotos.count = \(prerenderedPhotos.count))")
+                continue
+            }
             
             let photo = prerenderedPhotos[index]
             let rect = item.rect
@@ -1099,29 +1150,12 @@ class VideoExporter: ObservableObject {
         let size = Int(min(rect.width, rect.height))
         let cacheKey = "hex_\(size)"
         
-        //   FIX: Just check if key exists, don't assign to variable
-        if shapePathCache[cacheKey] != nil {
-            // Create a copy at the correct position
-            let path = CGMutablePath()
-            let center = CGPoint(x: rect.midX, y: rect.midY)
-            let radius = min(rect.width, rect.height) / 2
-            
-            for i in 0..<6 {
-                let angle = CGFloat(i) * .pi / 3
-                let x = center.x + radius * cos(angle)
-                let y = center.y + radius * sin(angle)
-                
-                if i == 0 {
-                    path.move(to: CGPoint(x: x, y: y))
-                } else {
-                    path.addLine(to: CGPoint(x: x, y: y))
-                }
-            }
-            path.closeSubpath()
-            return path
+        // Return cached if it exists
+        if let cachedPath = shapePathCache[cacheKey] {
+            return cachedPath
         }
         
-        // Generate and cache (rest stays the same)
+        // Generate new path
         let path = CGMutablePath()
         let center = CGPoint(x: rect.midX, y: rect.midY)
         let radius = min(rect.width, rect.height) / 2
@@ -1147,22 +1181,12 @@ class VideoExporter: ObservableObject {
         let size = Int(rect.width)
         let cacheKey = "tri_\(size)"
         
-        // Check cache first
-        if let _ = shapePathCache[cacheKey] {
-            // Triangles are simple enough to just recreate
-            let path = CGMutablePath()
-            let top = CGPoint(x: rect.midX, y: rect.minY)
-            let bottomLeft = CGPoint(x: rect.minX, y: rect.maxY)
-            let bottomRight = CGPoint(x: rect.maxX, y: rect.maxY)
-            
-            path.move(to: top)
-            path.addLine(to: bottomRight)
-            path.addLine(to: bottomLeft)
-            path.closeSubpath()
-            return path
+        // Return cached if it exists
+        if let cachedPath = shapePathCache[cacheKey] {
+            return cachedPath
         }
         
-        // Generate and cache
+        // Generate new path
         let path = CGMutablePath()
         let top = CGPoint(x: rect.midX, y: rect.minY)
         let bottomLeft = CGPoint(x: rect.minX, y: rect.maxY)
@@ -1176,6 +1200,7 @@ class VideoExporter: ObservableObject {
         shapePathCache[cacheKey] = path
         return path
     }
+    
     // MARK: - Map Completion Flash Effect
 
     private func drawMapCompletion(

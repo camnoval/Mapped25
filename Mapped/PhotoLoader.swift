@@ -663,130 +663,140 @@ class PhotoLoader: ObservableObject {
             self.updateLegacyFriendProperties()
         }
     }
+    
     func preparePhotosForVideo() {
         guard !locations.isEmpty else { return }
         
+        // CRITICAL: Check if cached video photos are still valid
         if let cached = PersistenceManager.shared.loadCachedVideoPhotos() {
-                print("Video photos already cached (\(cached.count) photos)")
-                return
+            // Validate cache by checking count and date range
+            if let firstDate = photoTimeStamps.first, let lastDate = photoTimeStamps.last,
+               let cachedFirst = cached.first?.date, let cachedLast = cached.last?.date {
+                
+                let firstMatch = abs(firstDate.timeIntervalSince(cachedFirst)) < 86400
+                let lastMatch = abs(lastDate.timeIntervalSince(cachedLast)) < 86400
+                
+                if firstMatch && lastMatch {
+                    print("📸 Video photos already cached (\(cached.count) photos) - VALID")
+                    return
+                } else {
+                    print("⚠️ Cached video photos are stale, regenerating...")
+                    PersistenceManager.shared.clearVideoPhotosCache()
+                }
             }
-        // Try to load from cache first
-        if let cached = PersistenceManager.shared.loadCachedVideoPhotos() {
-            DispatchQueue.main.async {
-                print("Loaded \(cached.count) photos from cache for video")
-            }
-            return
         }
         
-        print("No cached video photos found, preparing fresh...")
+        print("🎬 Preparing video photos from \(allPhotosAtLocation.count) locations...")
         
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             
-            let fetchOptions = PHFetchOptions()
-            
-            let calendar = Calendar.current
-            let currentYear = debugYear ?? calendar.component(.year, from: Date())
-            
-            var startComponents = DateComponents()
-            startComponents.year = currentYear
-            startComponents.month = 1
-            startComponents.day = 1
-            
-            var endComponents = DateComponents()
-            endComponents.year = currentYear
-            endComponents.month = 12
-            endComponents.day = 31
-            
-            guard let startDate = calendar.date(from: startComponents),
-                  let endDate = calendar.date(from: endComponents) else {
-                return
+            // DEBUG: Print date range
+            if let firstDate = self.photoTimeStamps.first, let lastDate = self.photoTimeStamps.last {
+                let df = DateFormatter()
+                df.dateFormat = "MMM d, yyyy"
+                print("📅 PhotoTimeStamps range: \(df.string(from: firstDate)) to \(df.string(from: lastDate))")
+                print("📍 Total locations: \(self.locations.count)")
             }
             
-            fetchOptions.predicate = NSPredicate(
-                format: "creationDate >= %@ AND creationDate <= %@",
-                startDate as CVarArg,
-                endDate as CVarArg
-            )
-            fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
-            
-            let assets = PHAsset.fetchAssets(with: .image, options: fetchOptions)
-            
-            // RESTORED OLD LOGIC: Group photos by day and limit to 5 per day
-            var photosByDay: [String: [PHAsset]] = [:]
-            let dateFormatter = DateFormatter()
-            dateFormatter.dateFormat = "yyyy-MM-dd"
-            
-            for i in 0..<assets.count {
-                let asset = assets[i]
-                if let date = asset.creationDate, asset.location != nil {
-                    let dayKey = dateFormatter.string(from: date)
-                    if photosByDay[dayKey] == nil {
-                        photosByDay[dayKey] = []
-                    }
-                    // Keep max 5 per day to prevent clustering
-                    if photosByDay[dayKey]!.count < 5 {
-                        photosByDay[dayKey]!.append(asset)
-                    }
-                }
-            }
-            
-            // Flatten to get all assets (max 5 per day)
-            var selectedAssets: [PHAsset] = []
-            for (_, dayAssets) in photosByDay.sorted(by: { $0.key < $1.key }) {
-                selectedAssets.append(contentsOf: dayAssets)
-            }
-            
-            // RESTORED: Load up to 200 photos with stride sampling
-            let maxPhotos = min(200, selectedAssets.count)
-            let step = max(1, selectedAssets.count / maxPhotos)
-            
-            print("📸 Distributing \(maxPhotos) photos from \(selectedAssets.count) total (stride: \(step))")
-            
-            var tempPhotos: [(image: UIImage, date: Date, location: CLLocation?)] = []
-            let imageManager = PHImageManager.default()
-            let options = PHImageRequestOptions()
-            options.isSynchronous = false
-            options.deliveryMode = .fastFormat
-            options.resizeMode = .fast
-            options.isNetworkAccessAllowed = false
-            
+            // ⭐ CRITICAL FIX: Load real images from disk, not placeholders!
+            var allPhotoData: [(image: UIImage, date: Date, location: CLLocation)] = []
             let dispatchGroup = DispatchGroup()
             let lock = NSLock()
             
-            // Use stride instead of complex per-day distribution
-            for i in stride(from: 0, to: selectedAssets.count, by: step) {
-                if tempPhotos.count >= maxPhotos { break }
+            for (locIndex, _) in self.allPhotosAtLocation.enumerated() {
+                guard locIndex < self.photoTimeStamps.count && locIndex < self.locations.count else { continue }
                 
-                let asset = selectedAssets[i]
+                let date = self.photoTimeStamps[locIndex]
+                let coordinate = self.locations[locIndex]
+                let location = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+                
                 dispatchGroup.enter()
                 
-                imageManager.requestImage(
-                    for: asset,
-                    targetSize: CGSize(width: 200, height: 200),
-                    contentMode: .aspectFill,
-                    options: options
-                ) { image, info in
-                    if let image = image, let date = asset.creationDate {
-                        let opaqueImage = image.removeAlphaChannel() ?? image
-                        let location = asset.location
+                // ⭐ Load actual images from disk cache
+                DispatchQueue.global(qos: .userInitiated).async {
+                    if let photosAtLoc = PersistenceManager.shared.loadPhotosAtLocation(at: locIndex) {
                         lock.lock()
-                        tempPhotos.append((opaqueImage, date, location))
+                        for photo in photosAtLoc {
+                            allPhotoData.append((photo, date, location))
+                        }
                         lock.unlock()
+                    } else {
+                        print("⚠️ Failed to load photos at location \(locIndex)")
                     }
                     dispatchGroup.leave()
                 }
             }
             
-            dispatchGroup.notify(queue: .main) {
-                // Sort by date to ensure chronological order
-                let sortedPhotos = tempPhotos.sorted { $0.date < $1.date }
+            dispatchGroup.notify(queue: .global(qos: .userInitiated)) {
+                print("📸 Loaded \(allPhotoData.count) real photos from disk for video")
                 
-                // CACHE THEM for next time
-                PersistenceManager.shared.cacheVideoPhotos(sortedPhotos)
+                // Group by day
+                let dateFormatter = DateFormatter()
+                dateFormatter.dateFormat = "yyyy-MM-dd"
                 
-                if let first = sortedPhotos.first, let last = sortedPhotos.last {
-                    print("Prepared \(sortedPhotos.count) photos spanning from \(first.date) to \(last.date)")
+                var photosByDay: [String: [(image: UIImage, date: Date, location: CLLocation)]] = [:]
+                
+                for photoData in allPhotoData {
+                    let dayKey = dateFormatter.string(from: photoData.date)
+                    if photosByDay[dayKey] == nil {
+                        photosByDay[dayKey] = []
+                    }
+                    photosByDay[dayKey]!.append(photoData)
+                }
+                
+                print("📅 Photos spread across \(photosByDay.count) days")
+                
+                // Sample from each day
+                var sampledPhotos: [(image: UIImage, date: Date, location: CLLocation?)] = []
+                
+                let totalPhotos = allPhotoData.count
+                
+                if totalPhotos <= 400 {
+                    print("✅ Using all \(totalPhotos) photos (under 400 limit)")
+                    sampledPhotos = allPhotoData
+                } else {
+                    print("🎲 Randomly sampling up to 5 photos per day from \(totalPhotos) photos")
+                    
+                    for (_, dayPhotos) in photosByDay.sorted(by: { $0.key < $1.key }) {
+                        let shuffled = dayPhotos.shuffled()
+                        let sampled = Array(shuffled.prefix(5))
+                        sampledPhotos.append(contentsOf: sampled)
+                    }
+                }
+                
+                print("📸 After day sampling: \(sampledPhotos.count) photos")
+                
+                // If still over 400, do final distribution
+                var finalPhotos: [(image: UIImage, date: Date, location: CLLocation?)] = []
+                
+                if sampledPhotos.count <= 400 {
+                    finalPhotos = sampledPhotos
+                } else {
+                    let step = Double(sampledPhotos.count) / 400.0
+                    for i in 0..<400 {
+                        let index = Int(Double(i) * step)
+                        if index < sampledPhotos.count {
+                            finalPhotos.append(sampledPhotos[index])
+                        }
+                    }
+                }
+                
+                // Sort by date
+                let sortedPhotos = finalPhotos.sorted { $0.date < $1.date }
+                
+                print("📸 Final sorted photos: \(sortedPhotos.count)")
+                
+                // Convert to opaque
+                let opaquePhotos = sortedPhotos.map { photo -> (image: UIImage, date: Date, location: CLLocation?) in
+                    let opaqueImage = photo.image.removeAlphaChannel() ?? photo.image
+                    return (opaqueImage, photo.date, photo.location)
+                }
+                
+                // Cache
+                DispatchQueue.main.async {
+                    PersistenceManager.shared.cacheVideoPhotos(opaquePhotos)
+                    print("✅ Cached \(opaquePhotos.count) photos for video")
                 }
             }
         }
@@ -913,7 +923,35 @@ class PhotoLoader: ObservableObject {
             }
         }
         
-        // Remove entire locations that are now empty (in descending order)
+        // CRITICAL: First, rebuild allPhotoTimestamps BEFORE we remove locations
+        // Mark which locations we're keeping
+        var keptLocations: [(location: CLLocationCoordinate2D, timestamp: Date, photos: [UIImage])] = []
+
+        for (index, photosAtLoc) in allPhotosAtLocation.enumerated() {
+            // Skip locations that will be removed
+            if locationsToRemove.contains(index) {
+                continue
+            }
+            
+            keptLocations.append((
+                location: locations[index],
+                timestamp: photoTimeStamps[index],
+                photos: photosAtLoc
+            ))
+        }
+
+        // Now rebuild allPhotoTimestamps from kept locations
+        var newAllTimestamps: [Date] = []
+        for kept in keptLocations {
+            for _ in kept.photos {
+                newAllTimestamps.append(kept.timestamp)
+            }
+        }
+
+        allPhotoTimestamps = newAllTimestamps
+        totalPhotosWithLocation = allPhotoTimestamps.count
+
+        // NOW remove entire locations that are empty (in descending order)
         for locIndex in locationsToRemove.sorted(by: >) {
             locations.remove(at: locIndex)
             photoTimeStamps.remove(at: locIndex)
@@ -921,10 +959,134 @@ class PhotoLoader: ObservableObject {
             allPhotosAtLocation.remove(at: locIndex)
         }
         
+        // Recalculate statistics with new data
         recalculateStatistics()
+        
+        // Save updated data
         saveUserData()
         
-        print("✅ Deleted \(photosToDelete.count) photos")
+        // CRITICAL: Clear ALL caches including video photos cache
+        print("🗑️ Clearing all caches after photo deletion...")
+        PersistenceManager.shared.clearAllCaches()
+        
+        // CRITICAL: Rebuild caches SYNCHRONOUSLY so they're ready immediately
+        print("🔨 Rebuilding caches synchronously...")
+        
+        // Rebuild thumbnail cache (this is fast, thumbnails are already in memory)
+        PersistenceManager.shared.cacheThumbnails(self.thumbnails)
+        
+        // Rebuild allPhotos cache (this is slower but necessary)
+        PersistenceManager.shared.cacheAllPhotosAtLocation(self.allPhotosAtLocation)
+        
+        // CRITICAL: Rebuild video photos cache with new filtered data
+        print("🎬 Rebuilding video cache with \(self.allPhotosAtLocation.count) locations...")
+        self.preparePhotosForVideoFromMemory()
+        
+        print("✅ Deleted \(photosToDelete.count) photos, all caches rebuilt with \(self.locations.count) remaining locations")
+    }
+    
+    // NEW: Build video photos from current filtered memory (not from photo library)
+    private func preparePhotosForVideoFromMemory() {
+        guard !locations.isEmpty else { return }
+        
+        print("🎬 Building video photos from filtered locations in memory...")
+        
+        // CRITICAL: We need to RELOAD images from disk cache, not use memory placeholders!
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            
+            var allPhotoData: [(image: UIImage, date: Date, location: CLLocation)] = []
+            let dispatchGroup = DispatchGroup()
+            let lock = NSLock()
+            
+            // Load each location's photos from disk
+            for (locIndex, _) in self.allPhotosAtLocation.enumerated() {
+                guard locIndex < self.photoTimeStamps.count && locIndex < self.locations.count else { continue }
+                
+                let date = self.photoTimeStamps[locIndex]
+                let coordinate = self.locations[locIndex]
+                let location = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+                
+                dispatchGroup.enter()
+                
+                // Load from disk cache
+                DispatchQueue.global(qos: .userInitiated).async {
+                    if let photosAtLoc = PersistenceManager.shared.loadPhotosAtLocation(at: locIndex) {
+                        lock.lock()
+                        for photo in photosAtLoc {
+                            allPhotoData.append((photo, date, location))
+                        }
+                        lock.unlock()
+                    }
+                    dispatchGroup.leave()
+                }
+            }
+            
+            dispatchGroup.notify(queue: .global(qos: .userInitiated)) {
+                print("📸 Loaded \(allPhotoData.count) photos from disk for video")
+                
+                // Group by day
+                let dateFormatter = DateFormatter()
+                dateFormatter.dateFormat = "yyyy-MM-dd"
+                
+                var photosByDay: [String: [(image: UIImage, date: Date, location: CLLocation)]] = [:]
+                
+                for photoData in allPhotoData {
+                    let dayKey = dateFormatter.string(from: photoData.date)
+                    if photosByDay[dayKey] == nil {
+                        photosByDay[dayKey] = []
+                    }
+                    photosByDay[dayKey]!.append(photoData)
+                }
+                
+                // Sample from each day
+                var sampledPhotos: [(image: UIImage, date: Date, location: CLLocation?)] = []
+                
+                let totalPhotos = allPhotoData.count
+                
+                if totalPhotos <= 400 {
+                    print("✅ Using all \(totalPhotos) photos (under 400 limit)")
+                    sampledPhotos = allPhotoData
+                } else {
+                    print("🎲 Randomly sampling up to 5 photos per day from \(totalPhotos) photos")
+                    
+                    for (_, dayPhotos) in photosByDay.sorted(by: { $0.key < $1.key }) {
+                        let shuffled = dayPhotos.shuffled()
+                        let sampled = Array(shuffled.prefix(5))
+                        sampledPhotos.append(contentsOf: sampled)
+                    }
+                }
+                
+                // If still over 400, do final distribution
+                var finalPhotos: [(image: UIImage, date: Date, location: CLLocation?)] = []
+                
+                if sampledPhotos.count <= 400 {
+                    finalPhotos = sampledPhotos
+                } else {
+                    let step = Double(sampledPhotos.count) / 400.0
+                    for i in 0..<400 {
+                        let index = Int(Double(i) * step)
+                        if index < sampledPhotos.count {
+                            finalPhotos.append(sampledPhotos[index])
+                        }
+                    }
+                }
+                
+                // Sort by date
+                let sortedPhotos = finalPhotos.sorted { $0.date < $1.date }
+                
+                // Convert to opaque
+                let opaquePhotos = sortedPhotos.map { photo -> (image: UIImage, date: Date, location: CLLocation?) in
+                    let opaqueImage = photo.image.removeAlphaChannel() ?? photo.image
+                    return (opaqueImage, photo.date, photo.location)
+                }
+                
+                // Cache
+                PersistenceManager.shared.cacheVideoPhotos(opaquePhotos)
+                
+                print("✅ Cached \(opaquePhotos.count) filtered photos for video from memory")
+            }
+        }
     }
     
     func reloadAllPhotos() {
@@ -938,12 +1100,15 @@ class PhotoLoader: ObservableObject {
         PersistenceManager.shared.clearAllCaches()
         PersistenceManager.shared.clearUserData()
         
+        // Clear video cache
+        UserDefaults.standard.removeObject(forKey: "VideoPhotosCache")
+        
         // Reload from library
         checkPhotoLibraryPermission()
         
-        print("🔄 Reloading all photos from library")
+        print("🔄 Reloading all photos from library and cleared all caches")
     }
-} 
+}
 // MARK: - UIImage Extension to Remove Alpha
 
 extension UIImage {

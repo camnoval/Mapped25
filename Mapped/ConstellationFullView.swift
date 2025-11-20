@@ -311,18 +311,20 @@ class ConstellationBuilder {
 
 struct ConstellationFullView: View {
     @ObservedObject var photoLoader: PhotoLoader
+    @Binding var scale: CGFloat
+    @Binding var rotation: Angle
+    @Binding var backgroundStars: [(x: CGFloat, y: CGFloat, size: CGFloat, opacity: Double)]
+    @Binding var stars: [ConstellationStar]
+    @Binding var connections: [ConstellationConnection]
+    
     @State private var revealProgress: Double = 0.0
     @State private var showShareSheet = false
     @State private var shareImage: UIImage?
-    @State private var backgroundStars: [(x: CGFloat, y: CGFloat, size: CGFloat, opacity: Double)] = []
     @State private var isGeneratingImage = false
-    @State private var scale: CGFloat = 1.0
-    @State private var rotation: Angle = .zero
     @State private var lastScale: CGFloat = 1.0
     @State private var lastRotation: Angle = .zero
-    //generate constellation once
-    @State private var constellationStars: [ConstellationStar] = []
-    @State private var constellationConnections: [ConstellationConnection] = []
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
     
     var body: some View {
         ZStack {
@@ -387,55 +389,63 @@ struct ConstellationFullView: View {
                 
                 if !photoLoader.locations.isEmpty {
                     GeometryReader { geometry in
+                        let containerWidth = geometry.size.width
+                        let containerHeight: CGFloat = 500
+                        
                         FullConstellationDisplayView(
                             locations: photoLoader.locations,
                             progress: revealProgress,
-                            stars: constellationStars,
-                            connections: constellationConnections
+                            stars: stars,
+                            connections: connections,
+                            containerSize: CGSize(width: containerWidth, height: containerHeight)
                         )
-                        .onAppear {
-                            if constellationStars.isEmpty {
-                                let constellation = ConstellationBuilder.buildConstellation(
-                                    locations: photoLoader.locations,
-                                    viewSize: geometry.size
-                                )
-                                constellationStars = constellation.stars
-                                constellationConnections = constellation.connections
-                            }
-                        }
                     }
                     .frame(height: 500)
                     .padding(.horizontal, 30)
+                    .offset(offset)
                     .scaleEffect(scale)
                     .rotationEffect(rotation)
+                    .contentShape(Rectangle())
                     .gesture(
                         SimultaneousGesture(
-                            MagnificationGesture()
+                            DragGesture()
                                 .onChanged { value in
-                                    scale = lastScale * value
+                                    offset = CGSize(
+                                        width: lastOffset.width + value.translation.width,
+                                        height: lastOffset.height + value.translation.height
+                                    )
                                 }
-                                .onEnded { value in
-                                    lastScale = scale
+                                .onEnded { _ in
+                                    lastOffset = offset
                                 },
-                            RotationGesture()
-                                .onChanged { value in
-                                    rotation = lastRotation + value
-                                }
-                                .onEnded { value in
-                                    lastRotation = rotation
-                                }
+                            SimultaneousGesture(
+                                MagnificationGesture()
+                                    .onChanged { value in
+                                        scale = lastScale * value
+                                    }
+                                    .onEnded { value in
+                                        lastScale = scale
+                                    },
+                                RotationGesture()
+                                    .onChanged { value in
+                                        rotation = lastRotation + value
+                                    }
+                                    .onEnded { value in
+                                        lastRotation = rotation
+                                    }
+                            )
                         )
                     )
                 }
                 
                 Spacer()
                 
-                Text("\(constellationStars.count) stars • Your unique pattern")
+                Text("\(stars.count) stars • Your unique pattern")
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.7))
                     .padding(.bottom, 5)
                 
-                Text("Pinch to zoom • Rotate with two fingers")
+                Text("Drag to move • Pinch to zoom • Rotate with two fingers")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.5))
                 
@@ -454,13 +464,15 @@ struct ConstellationFullView: View {
     }
     
     private func generateBackgroundStars() {
+        guard backgroundStars.isEmpty else { return }
+        
         let screenWidth = UIScreen.main.bounds.width
         let screenHeight = UIScreen.main.bounds.height
         
-        var stars: [(x: CGFloat, y: CGFloat, size: CGFloat, opacity: Double)] = []
+        var newStars: [(x: CGFloat, y: CGFloat, size: CGFloat, opacity: Double)] = []
         
         for _ in 0..<200 {
-            stars.append((
+            newStars.append((
                 x: CGFloat.random(in: 0...screenWidth),
                 y: CGFloat.random(in: 0...screenHeight),
                 size: CGFloat.random(in: 1...3),
@@ -468,7 +480,7 @@ struct ConstellationFullView: View {
             ))
         }
         
-        backgroundStars = stars
+        backgroundStars = newStars
     }
     
     private func restart() {
@@ -477,26 +489,26 @@ struct ConstellationFullView: View {
         rotation = .zero
         lastScale = 1.0
         lastRotation = .zero
+        offset = .zero
+        lastOffset = .zero
         withAnimation(.easeInOut(duration: 3.0)) {
             revealProgress = 1.0
         }
     }
     
     private func shareConstellation() {
-        // Prevent double-tapping
         guard !isGeneratingImage else { return }
         
         isGeneratingImage = true
         
-        // Create the view and hosting controller on main thread
         let snapshotView = ConstellationSnapshotView(
             locations: photoLoader.locations,
             locationCount: photoLoader.locations.count,
             scale: scale,
             rotation: rotation,
             backgroundStars: backgroundStars,
-            stars: constellationStars,
-            connections: constellationConnections
+            stars: stars,
+            connections: connections
         )
         
         let hostingController = UIHostingController(rootView: snapshotView)
@@ -504,20 +516,16 @@ struct ConstellationFullView: View {
         hostingController.view.bounds = CGRect(origin: .zero, size: targetSize)
         hostingController.view.backgroundColor = .clear
         
-        // Force layout
         hostingController.view.setNeedsLayout()
         hostingController.view.layoutIfNeeded()
         
-        // Give SwiftUI time to render, then generate image (all on main thread)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            // Render image (must be on main thread)
             let format = UIGraphicsImageRendererFormat()
             format.opaque = true
             format.scale = 2.0
             
             let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
             let image = renderer.image { context in
-                // Fill black background first (since opaque)
                 UIColor.black.setFill()
                 context.fill(CGRect(origin: .zero, size: targetSize))
                 
@@ -530,7 +538,6 @@ struct ConstellationFullView: View {
             self.shareImage = image
             self.isGeneratingImage = false
             
-            // Small delay before showing share sheet
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 self.showShareSheet = true
             }
@@ -547,6 +554,7 @@ struct FullConstellationDisplayView: View {
     let progress: Double
     let stars: [ConstellationStar]
     let connections: [ConstellationConnection]
+    let containerSize: CGSize
     
     var body: some View {
         let visibleStarCount = Int(Double(stars.count) * progress)
@@ -557,10 +565,18 @@ struct FullConstellationDisplayView: View {
             visibleStars.contains(where: { $0.id == connection.to.id })
         }
         
+        // Calculate scaling to fit container
+        let scaledStars = scaleStarsToContainer(stars: visibleStars, containerSize: containerSize)
+        let scaledConnections = scaleConnectionsToContainer(
+            connections: visibleConnections,
+            originalStars: visibleStars,
+            scaledStars: scaledStars
+        )
+        
         ZStack {
             // Draw connections
-            ForEach(visibleConnections.indices, id: \.self) { index in
-                let connection = visibleConnections[index]
+            ForEach(scaledConnections.indices, id: \.self) { index in
+                let connection = scaledConnections[index]
                 Path { path in
                     path.move(to: connection.from.screenPosition)
                     path.addLine(to: connection.to.screenPosition)
@@ -578,13 +594,79 @@ struct FullConstellationDisplayView: View {
             }
             
             // Draw stars
-            ForEach(visibleStars) { star in
+            ForEach(scaledStars) { star in
                 FullConstellationStarView(star: star)
             }
         }
+        .frame(width: containerSize.width, height: containerSize.height)
+    }
+    
+    private func scaleStarsToContainer(stars: [ConstellationStar], containerSize: CGSize) -> [ConstellationStar] {
+        guard !stars.isEmpty else { return [] }
+        
+        // Find bounds
+        var minX = stars[0].screenPosition.x
+        var maxX = stars[0].screenPosition.x
+        var minY = stars[0].screenPosition.y
+        var maxY = stars[0].screenPosition.y
+        
+        for star in stars {
+            minX = min(minX, star.screenPosition.x)
+            maxX = max(maxX, star.screenPosition.x)
+            minY = min(minY, star.screenPosition.y)
+            maxY = max(maxY, star.screenPosition.y)
+        }
+        
+        let originalWidth = maxX - minX
+        let originalHeight = maxY - minY
+        
+        // Scale to fit with padding
+        let padding: CGFloat = 40
+        let availableWidth = containerSize.width - (padding * 2)
+        let availableHeight = containerSize.height - (padding * 2)
+        
+        let scaleX = availableWidth / originalWidth
+        let scaleY = availableHeight / originalHeight
+        let scaleFactor = min(scaleX, scaleY)
+        
+        // Center in container
+        let scaledWidth = originalWidth * scaleFactor
+        let scaledHeight = originalHeight * scaleFactor
+        let offsetX = (containerSize.width - scaledWidth) / 2
+        let offsetY = (containerSize.height - scaledHeight) / 2
+        
+        return stars.map { star in
+            let scaledX = (star.screenPosition.x - minX) * scaleFactor + offsetX
+            let scaledY = (star.screenPosition.y - minY) * scaleFactor + offsetY
+            
+            return ConstellationStar(
+                coordinate: star.coordinate,
+                intensity: star.intensity,
+                screenPosition: CGPoint(x: scaledX, y: scaledY)
+            )
+        }
+    }
+    
+    private func scaleConnectionsToContainer(
+        connections: [ConstellationConnection],
+        originalStars: [ConstellationStar],
+        scaledStars: [ConstellationStar]
+    ) -> [ConstellationConnection] {
+        return connections.compactMap { connection in
+            guard let fromIndex = originalStars.firstIndex(where: { $0.id == connection.from.id }),
+                  let toIndex = originalStars.firstIndex(where: { $0.id == connection.to.id }),
+                  fromIndex < scaledStars.count,
+                  toIndex < scaledStars.count else {
+                return nil
+            }
+            
+            return ConstellationConnection(
+                from: scaledStars[fromIndex],
+                to: scaledStars[toIndex]
+            )
+        }
     }
 }
-
 struct FullConstellationStarView: View {
     let star: ConstellationStar
     

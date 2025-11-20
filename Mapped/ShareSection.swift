@@ -81,6 +81,7 @@ struct ShareSection: View {
     @State private var selectedTheme: ImageTheme = .oceanBlue
     @State private var showFriendSelector = false
     @State private var selectedFriendIDs: Set<UUID> = []
+
     @AppStorage("userEmoji") private var userEmoji = "🚶"
     @AppStorage("userColor") private var userColor = "#33CCBB"
     @AppStorage("userName") private var userName = "You"
@@ -199,8 +200,19 @@ struct ShareSection: View {
             }
         }
         .onAppear {
-            loadCachedShareImage()
-            loadCachedVideo()
+            // Check if we need to invalidate caches
+            let currentCount = photoLoader.locations.count
+            let cachedCount = UserDefaults.standard.integer(forKey: "LastPhotoLocationCount")
+            
+            if cachedCount != currentCount {
+                print("📊 Location count changed from \(cachedCount) to \(currentCount), clearing caches")
+                shareImage = nil
+                videoExporter.exportedVideoURL = nil
+                UserDefaults.standard.set(currentCount, forKey: "LastPhotoLocationCount")
+            } else {
+                loadCachedShareImage()
+                loadCachedVideo()
+            }
         }
         .sheet(isPresented: $showVideoPlayer) {
             if let url = videoExporter.exportedVideoURL {
@@ -212,9 +224,10 @@ struct ShareSection: View {
     private func exportVideo() {
         let selectedFriends = photoLoader.friends.filter { selectedFriendIDs.contains($0.id) }
         
-        // DON'T clear the old video - just hide it during generation
-        // The old URL stays intact so if generation fails, user still has their video
         justFinishedExport = false
+        
+        // Store current count before export
+        UserDefaults.standard.set(photoLoader.locations.count, forKey: "LastPhotoLocationCount")
         
         VideoExportManager.shared.startExport(
             exporter: videoExporter,
@@ -225,6 +238,7 @@ struct ShareSection: View {
             loadPhotosFromCache: true
         )
     }
+    
     // MARK: Image Export View
     private var imageExportView: some View {
         VStack(spacing: 25) {
@@ -235,7 +249,10 @@ struct ShareSection: View {
                     .foregroundColor(.primary)
                 
                 HStack(spacing: 20) {
-                    Button(action: previousTheme) {
+                    Button(action: {
+                        previousTheme()
+                        generateShareImage()
+                    }) {
                         Image(systemName: "chevron.left.circle.fill")
                             .font(.system(size: 44))
                             .foregroundColor(.blue)
@@ -261,13 +278,54 @@ struct ShareSection: View {
                     }
                     .frame(width: 200)
                     
-                    Button(action: nextTheme) {
+                    Button(action: {
+                        nextTheme()
+                        generateShareImage()
+                    }) {
                         Image(systemName: "chevron.right.circle.fill")
                             .font(.system(size: 44))
                             .foregroundColor(.blue)
                     }
                 }
                 .padding(.vertical, 10)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 15)
+            .background(Color(.systemGray6))
+            .cornerRadius(20)
+            .padding(.horizontal)
+            
+            // ⭐ Path Color Selector - updates global userColor
+            VStack(spacing: 15) {
+                Text("Your Path Color")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 6), spacing: 10) {
+                    ForEach(pathColorOptions, id: \.1) { colorName, colorHex in
+                        Button(action: {
+                            userColor = colorHex  // ⭐ Update global color
+                            generateShareImage()  // Auto-regenerate
+                        }) {
+                            VStack(spacing: 5) {
+                                Circle()
+                                    .fill(Color(hex: colorHex) ?? .gray)
+                                    .frame(width: 44, height: 44)
+                                    .overlay(
+                                        Circle()
+                                            .stroke(
+                                                userColor == colorHex ? Color.primary : Color.clear,  // ⭐ Compare with userColor
+                                                lineWidth: 3
+                                            )
+                                    )
+                                
+                                Text(colorName)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
             }
             .padding(.horizontal)
             .padding(.vertical, 15)
@@ -289,6 +347,17 @@ struct ShareSection: View {
                         .shadow(radius: 10)
                 }
                 .padding(.horizontal)
+            } else if isGenerating {
+                VStack(spacing: 15) {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .blue))
+                        .scaleEffect(1.5)
+                    Text("Generating image...")
+                        .foregroundColor(.gray)
+                        .font(.subheadline)
+                }
+                .frame(height: 300)
+                .padding(.horizontal)
             } else {
                 RoundedRectangle(cornerRadius: 15)
                     .fill(Color.gray.opacity(0.1))
@@ -298,7 +367,7 @@ struct ShareSection: View {
                             Image(systemName: "photo")
                                 .font(.system(size: 50))
                                 .foregroundColor(.gray)
-                            Text("Generate to see preview")
+                            Text("Loading preview...")
                                 .foregroundColor(.gray)
                                 .font(.subheadline)
                         }
@@ -307,27 +376,6 @@ struct ShareSection: View {
             }
             
             VStack(spacing: 15) {
-                Button(action: generateShareImage) {
-                    HStack {
-                        Image(systemName: shareImage == nil ? "sparkles" : "arrow.clockwise")
-                        Text(shareImage == nil ? "Generate Image" : "Regenerate")
-                    }
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(
-                        LinearGradient(
-                            colors: [Color.blue, Color.blue.opacity(0.8)],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .cornerRadius(15)
-                    .shadow(color: .blue.opacity(0.3), radius: 5, x: 0, y: 3)
-                }
-                .disabled(isGenerating || photoLoader.locations.isEmpty)
-                
                 if shareImage != nil {
                     Button(action: { showShareSheet = true }) {
                         HStack {
@@ -352,7 +400,28 @@ struct ShareSection: View {
             }
             .padding(.horizontal)
         }
+        .onAppear {
+            //RESET to Ocean Blue on appear, keep user's current path color
+            selectedTheme = .oceanBlue
+            shareImage = nil  // Clear cached image to force regeneration
+            
+            // Auto-generate with fresh settings
+            if !isGenerating {
+                generateShareImage()
+            }
+        }
     }
+
+    //Path color options - use the same set from FriendsManagerView for consistency
+    private let pathColorOptions: [(String, String)] = [
+        ("Red", "#FF0000"), ("Orange", "#FF8800"), ("Yellow", "#FFD700"),
+        ("Green", "#00FF00"), ("Teal", "#00CCCC"), ("Blue", "#0000FF"),
+        ("Purple", "#8800FF"), ("Pink", "#FF0088"), ("Magenta", "#FF00FF"),
+        ("Cyan", "#00FFFF"), ("Lime", "#00FF88"), ("Coral", "#FF6666"),
+        ("Indigo", "#4B0082"), ("Violet", "#8B008B"), ("Crimson", "#DC143C"),
+        ("Navy", "#000080"), ("Maroon", "#800000"), ("Olive", "#808000")
+    ]
+    
     // MARK: - Cache Loading
     
     private func loadCachedShareImage() {
@@ -725,6 +794,9 @@ struct ShareSection: View {
                 self.isGenerating = false
                 self.loadedFromCache = false
                 
+                // Save current location count
+                UserDefaults.standard.set(self.photoLoader.locations.count, forKey: "LastPhotoLocationCount")
+                
                 // Cache the generated image
                 DispatchQueue.global(qos: .utility).async {
                     PersistenceManager.shared.cacheLastShareImage(
@@ -829,6 +901,7 @@ struct ShareSection: View {
             
             let top8Stats = self.getTop8Stats()
             
+            // In createShareImage(), find the section that draws stats (around line 710)
             for (index, stat) in top8Stats.enumerated() {
                 let row = index / 2
                 let col = index % 2
@@ -866,12 +939,14 @@ struct ShareSection: View {
                 let keyRect = CGRect(x: x + textLeftPadding, y: y + 25, width: textWidth, height: 60)
                 keyText.draw(in: keyRect, withAttributes: keyAttrs)
                 
-                // Value
+                let valueToDisplay = stat.key.contains("Date Range") ?
+                    formatDateRangeWithoutYear(stat.value) : stat.value
+                
                 let valueAttrs: [NSAttributedString.Key: Any] = [
                     .font: UIFont.systemFont(ofSize: width * 0.0296, weight: .bold),
                     .foregroundColor: UIColor.white
                 ]
-                let valueText = stat.value as NSString
+                let valueText = valueToDisplay as NSString
                 let valueRect = CGRect(x: x + textLeftPadding, y: y + 70, width: textWidth, height: 60)
                 valueText.draw(in: valueRect, withAttributes: valueAttrs)
             }
@@ -884,6 +959,22 @@ struct ShareSection: View {
         let config = UIImage.SymbolConfiguration(pointSize: size, weight: .semibold)
         
         return UIImage(systemName: named, withConfiguration: config)?.withTintColor(.white, renderingMode: .alwaysOriginal)
+    }
+    
+    // MARK: - Helper: Format Date Range Without Year in Image
+    private func formatDateRangeWithoutYear(_ dateRangeString: String) -> String {
+        // Input format: "Jan 1, 2025 - Nov 26, 2025"
+        // Output format: "Jan 1 - Nov 26"
+        
+        let components = dateRangeString.components(separatedBy: " - ")
+        guard components.count == 2 else { return dateRangeString }
+        
+        let start = components[0].replacingOccurrences(of: ", 2025", with: "")
+                                 .replacingOccurrences(of: ", 2024", with: "")
+        let end = components[1].replacingOccurrences(of: ", 2025", with: "")
+                               .replacingOccurrences(of: ", 2024", with: "")
+        
+        return "\(start) - \(end)"
     }
     // MARK: - Map Snapshot for Image
     

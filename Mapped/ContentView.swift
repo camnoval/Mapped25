@@ -13,8 +13,14 @@ struct ContentView: View {
     @GestureState private var dragOffset: CGSize = .zero
     @State private var showVideoCompleteNotification = false
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
-    //Need to track old value manually for .onChange(of: exportManager.exportProgress) { newProgress since wanting ios 15 compat)
     @State private var previousExportProgress: Double = 0.0
+    
+    @State private var sharedConstellationScale: CGFloat = 1.0
+    @State private var sharedConstellationRotation: Angle = .zero
+    @State private var sharedConstellationBackgroundStars: [(x: CGFloat, y: CGFloat, size: CGFloat, opacity: Double)] = []
+    @State private var sharedConstellationStars: [ConstellationStar] = []
+    @State private var sharedConstellationConnections: [ConstellationConnection] = []
+    
     var body: some View {
         if !hasCompletedOnboarding {
             OnboardingView(hasCompletedOnboarding: $hasCompletedOnboarding)
@@ -209,18 +215,41 @@ struct ContentView: View {
                 photoLoader: photoLoader,
                 hasCompletedOnboarding: $hasCompletedOnboarding,
                 selectedFeature: $selectedFeature,
-                isHomeMenu: $isHomeMenu
+                isHomeMenu: $isHomeMenu,
+                constellationScale: $sharedConstellationScale,
+                constellationRotation: $sharedConstellationRotation,
+                constellationBackgroundStars: $sharedConstellationBackgroundStars,
+                constellationStars: $sharedConstellationStars,
+                constellationConnections: $sharedConstellationConnections
             )
+            .id(photoLoader.locations.count)
+            .onAppear {
+                buildConstellationIfNeeded()
+            }
         case "Map":
             MapSection(photoLoader: photoLoader)
+                .id(photoLoader.locations.count)
         case "Constellation":
-            ConstellationFullView(photoLoader: photoLoader)
+            ConstellationFullView(
+                photoLoader: photoLoader,
+                scale: $sharedConstellationScale,
+                rotation: $sharedConstellationRotation,
+                backgroundStars: $sharedConstellationBackgroundStars,
+                stars: $sharedConstellationStars,
+                connections: $sharedConstellationConnections
+            )
+            .id(photoLoader.locations.count)
+            .onAppear {
+                buildConstellationIfNeeded()
+            }
         case "Statistics":
             StatisticsSection(statistics: getStatistics(), photoLoader: photoLoader)
+                .id(photoLoader.locations.count)
         case "Friends":
             FriendsManagerView(photoLoader: photoLoader)
         case "Share":
             ShareSection(photoLoader: photoLoader, statistics: getStatistics())
+                .id(photoLoader.locations.count)
         case "Settings":
             SettingsView(photoLoader: photoLoader)
         default:
@@ -343,7 +372,7 @@ struct ContentView: View {
                 longestGap = max(longestGap, gap)
             }
             let days = Int(longestGap / 86400)
-            stats["Longest Gap Between Traveling Locations"] = "\(days) days"
+            stats["Longest Gap Between Traveling"] = "\(days) days"
         }
         
         return stats
@@ -390,6 +419,26 @@ struct ContentView: View {
         }
         
         return clusters
+    }
+    // MARK: - Constellation Builder Helper
+        
+    private func buildConstellationIfNeeded() {
+        guard sharedConstellationStars.isEmpty && !photoLoader.locations.isEmpty else { return }
+        
+        print("🌟 Building constellation for the first time")
+        
+        // Build with a normalized square size - we'll scale to fit in each view
+        let buildSize = CGSize(width: 600, height: 600)
+        
+        let constellation = ConstellationBuilder.buildConstellation(
+            locations: photoLoader.locations,
+            viewSize: buildSize
+        )
+        
+        sharedConstellationStars = constellation.stars
+        sharedConstellationConnections = constellation.connections
+        
+        print("✅ Built \(constellation.stars.count) stars, \(constellation.connections.count) connections")
     }
 }
 

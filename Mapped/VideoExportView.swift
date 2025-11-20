@@ -239,6 +239,10 @@ struct VideoExportView: View {
                     ShareSheetVideo(items: [url])
                 }
             }
+            .onAppear {
+                    // Clear notification badge when user opens video export view
+                    NotificationManager.shared.clearBadge()
+                }
         }
         
     private func exportVideo() {

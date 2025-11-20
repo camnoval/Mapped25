@@ -40,7 +40,7 @@ struct MapSection: View {
     @State private var isAnimating = false
     @State private var animationIndex = 0
     @State private var animationTimer: Timer?
-    @State private var animationSpeed: Double = 0.125
+    @State private var animationSpeed: Double = 0.06
     @State private var currentDate: Date?
     
     // Timeline slider state
@@ -846,9 +846,9 @@ struct MapView: UIViewRepresentable {
     
     func updateUIView(_ mapView: MKMapView, context: Context) {
         context.coordinator.showPolylines = showPolylines
-        
         context.coordinator.showPhotoBubbles = showPhotoBubbles
         context.coordinator.parent = self
+        
         
         context.coordinator.updateAnnotations(mapView: mapView, locations: locations, animationIndex: animationIndex)
         
@@ -866,7 +866,7 @@ struct MapView: UIViewRepresentable {
         var userHasManuallyInteracted = false
         var showPhotoBubbles = false
         private var walkerAnnotation: MKPointAnnotation?
-        private var locationAnnotations: [MKPointAnnotation] = []
+        var locationAnnotations: [MKPointAnnotation] = []
         private var pathOverlay: MKPolyline?
         private var preloadedSnapshots: [Int: MKMapSnapshotter] = [:]
         private var lastShowLocationMarkers: Bool = false

@@ -330,7 +330,8 @@ struct InfoRow: View {
     }
 }
 
-// MARK: - Photo Loading Screen
+// MARK: - Photo loading screen
+
 struct PhotoLoadingScreen: View {
     @Binding var hasCompletedOnboarding: Bool
     @StateObject private var photoLoader = PhotoLoader()
@@ -339,6 +340,15 @@ struct PhotoLoadingScreen: View {
     @State private var fakeProgress: Double = 0.0
     @State private var useFakeProgress = true
     @State private var progressTimer: Timer?
+    @State private var hasTriggeredTransition = false
+    @State private var failsafeTimer: Timer?
+    
+    // ADD: Constellation state for YearStoryCarousel
+    @State private var constellationScale: CGFloat = 1.0
+    @State private var constellationRotation: Angle = .zero
+    @State private var constellationBackgroundStars: [(x: CGFloat, y: CGFloat, size: CGFloat, opacity: Double)] = []
+    @State private var constellationStars: [ConstellationStar] = []
+    @State private var constellationConnections: [ConstellationConnection] = []
     
     enum LoadingPhase {
         case starting
@@ -371,19 +381,16 @@ struct PhotoLoadingScreen: View {
         }
     }
     
-    // Computed property that blends fake and real progress
     private var displayProgress: Double {
         if useFakeProgress {
             return fakeProgress
         } else {
-            // Use min to avoid jumping forward - show whichever is lower
             return min(fakeProgress, photoLoader.loadingProgress)
         }
     }
     
     var body: some View {
         ZStack {
-            // Background gradient
             LinearGradient(
                 colors: [Color.blue.opacity(0.3), Color.purple.opacity(0.3)],
                 startPoint: .topLeading,
@@ -395,7 +402,6 @@ struct PhotoLoadingScreen: View {
                 VStack(spacing: 40) {
                     Spacer()
                     
-                    // Animated icon
                     ZStack {
                         Circle()
                             .fill(Color.white.opacity(0.2))
@@ -413,10 +419,9 @@ struct PhotoLoadingScreen: View {
                             .font(.title2)
                             .fontWeight(.semibold)
                             .foregroundColor(.white)
-                            .id(loadingPhase) // Force text to animate smoothly
+                            .id(loadingPhase)
                             .transition(.opacity)
                         
-                        // Progress bar
                         ProgressView(value: displayProgress)
                             .progressViewStyle(LinearProgressViewStyle(tint: .white))
                             .frame(width: 250)
@@ -428,7 +433,6 @@ struct PhotoLoadingScreen: View {
                     
                     Spacer()
                     
-                    // Fun loading messages
                     Text(getLoadingTip())
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.7))
@@ -437,83 +441,95 @@ struct PhotoLoadingScreen: View {
                         .padding(.bottom, 40)
                 }
             } else {
-                // Show carousel when loading complete
                 YearStoryCarousel(
                     photoLoader: photoLoader,
                     hasCompletedOnboarding: $hasCompletedOnboarding,
                     selectedFeature: .constant(nil),
-                    isHomeMenu: .constant(true)
+                    isHomeMenu: .constant(true),
+                    constellationScale: $constellationScale,
+                    constellationRotation: $constellationRotation,
+                    constellationBackgroundStars: $constellationBackgroundStars,
+                    constellationStars: $constellationStars,
+                    constellationConnections: $constellationConnections
                 )
             }
         }
         .onAppear {
             startFakeProgress()
             loadPhotos()
+            startFailsafeTimer()
         }
         .onDisappear {
             progressTimer?.invalidate()
+            failsafeTimer?.invalidate()
         }
         .onChange(of: displayProgress) { newValue in
             updateLoadingPhase(progress: newValue)
         }
         .onChange(of: photoLoader.isLoading) { isLoading in
-            if !isLoading && !photoLoader.locations.isEmpty {
-                // Ensure we show complete state first
-                DispatchQueue.main.async {
-                    self.loadingPhase = .complete
-                }
-                
-                // Then transition to carousel
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                    withAnimation(.spring(response: 0.6)) {
-                        showCarousel = true
-                    }
-                }
+            if !isLoading {
+                checkAndTransition()
             }
         }
         .onChange(of: photoLoader.locations.count) { newValue in
-            if newValue > 0 && !showCarousel {
-                print("Detected \(newValue) locations loaded")
-                
-                // Force completion state
-                DispatchQueue.main.async {
-                    self.loadingPhase = .complete
-                }
-                
-                // Transition to carousel
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                    withAnimation(.spring(response: 0.6)) {
-                        showCarousel = true
-                    }
+            if newValue > 0 {
+                checkAndTransition()
+            }
+        }
+    }
+    
+    private func startFailsafeTimer() {
+        failsafeTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
+            if !hasTriggeredTransition {
+                print("⚠️ FAILSAFE: Forcing transition after 5 seconds if photos not loading anymore, loop")
+                checkAndTransition()
+            }
+        }
+    }
+    
+    private func checkAndTransition() {
+        guard !hasTriggeredTransition else { return }
+        
+        let shouldTransition = !photoLoader.isLoading &&
+                              (photoLoader.locations.count > 0 || displayProgress >= 0.99)
+        
+        if shouldTransition {
+            print("🎯 Triggering transition: locations=\(photoLoader.locations.count), progress=\(displayProgress)")
+            hasTriggeredTransition = true
+            
+            progressTimer?.invalidate()
+            failsafeTimer?.invalidate()
+            
+            DispatchQueue.main.async {
+                self.loadingPhase = .complete
+            }
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                withAnimation(.spring(response: 0.6)) {
+                    showCarousel = true
                 }
             }
         }
     }
-    // Increment progress gradually using a timer just because it automatically starts at 80% and is slow from there,
-    // which might be jarring to the user
+    
     private func startFakeProgress() {
-        // Increment progress gradually using a timer
-        let updateInterval: Double = 0.05 // Update every 50ms
+        let updateInterval: Double = 0.05
         
         progressTimer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { timer in
             DispatchQueue.main.async {
                 if self.useFakeProgress {
-                    // Fast progress for first 5 seconds (0 to 0.7)
                     let fastIncrement: Double = (0.7 / 5.0) * updateInterval
                     if self.fakeProgress < 0.7 {
                         self.fakeProgress += fastIncrement
                     } else {
-                        // Switch to real progress mode
                         self.useFakeProgress = false
                     }
                 } else {
-                    // Slow progress after 5 seconds (continue incrementing to avoid being stuck)
-                    let slowIncrement: Double = 0.002 // Very slow increment
+                    let slowIncrement: Double = 0.002
                     if self.fakeProgress < 1.0 {
                         self.fakeProgress += slowIncrement
                     }
                     
-                    // Stop timer when we hit 100%
                     if self.fakeProgress >= 1.0 {
                         timer.invalidate()
                     }
@@ -521,7 +537,6 @@ struct PhotoLoadingScreen: View {
             }
         }
     }
-
     
     private func loadPhotos() {
         photoLoader.checkPhotoLibraryPermission()
@@ -540,7 +555,6 @@ struct PhotoLoadingScreen: View {
             } else if progress >= 1.0 {
                 loadingPhase = .complete
             } else {
-                // Stay on creatingStory between 0.8 and 1.0
                 loadingPhase = .creatingStory
             }
         }

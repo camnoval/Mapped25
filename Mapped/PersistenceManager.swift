@@ -437,6 +437,19 @@ class PersistenceManager {
         print("Cleared video cache")
     }
     
+    func clearVideoPhotosCache() {
+        let cacheDir = getCacheDirectory()
+        let videoPhotosDir = cacheDir.appendingPathComponent("videoPhotos", isDirectory: true)
+        
+        // Remove the entire directory
+        try? FileManager.default.removeItem(at: videoPhotosDir)
+        
+        // Remove the UserDefaults flag
+        UserDefaults.standard.removeObject(forKey: "VideoPhotosCache")
+        
+        print("✅ Cleared video photos cache")
+    }
+    
     func clearShareImageCache() {
         let cacheDir = getCacheDirectory()
         try? FileManager.default.removeItem(at: cacheDir.appendingPathComponent("last_share_image.jpg"))
@@ -451,7 +464,7 @@ class PersistenceManager {
         UserDefaults.standard.removeObject(forKey: allPhotosAtLocationKey)
         UserDefaults.standard.removeObject(forKey: lastVideoExportKey)
         UserDefaults.standard.removeObject(forKey: lastShareImageKey)
-        UserDefaults.standard.removeObject(forKey: "VideoPhotosCache") 
+        UserDefaults.standard.removeObject(forKey: "VideoPhotosCache")
         print("Cleared all caches")
     }
     
