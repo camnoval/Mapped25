@@ -20,13 +20,23 @@ struct ConstellationConnection {
 class ConstellationBuilder {
     
     /// Cluster nearby locations into constellation stars
-    /// Cluster nearby locations into constellation stars
     static func buildConstellation(
         locations: [CLLocationCoordinate2D],
         viewSize: CGSize
     ) -> (stars: [ConstellationStar], connections: [ConstellationConnection]) {
         
+        // Handle edge case: 0 locations
         guard !locations.isEmpty else { return ([], []) }
+        
+        // Handle edge case: 1 location - create a single star with no connections
+        if locations.count == 1 {
+            let centerStar = ConstellationStar(
+                coordinate: locations[0],
+                intensity: 10,
+                screenPosition: CGPoint(x: viewSize.width / 2, y: viewSize.height / 2)
+            )
+            return ([centerStar], [])
+        }
         
         // Calculate total geographic span to determine clustering radius
         var minLat = locations[0].latitude
@@ -46,10 +56,8 @@ class ConstellationBuilder {
         let southeastCorner = CLLocation(latitude: minLat, longitude: maxLon)
         let totalSpan = northwestCorner.distance(from: southeastCorner)
         
-        // UPDATED: Increase cluster radius to reduce number of stars
-        // Use 8% of total span (was 5%) to merge more nearby locations
-        // Minimum 2km (was 1km), maximum 100km (was 50km)
-        let clusterRadius = max(2000, min(100000, totalSpan * 0.08))
+        // Prevent NaN by ensuring we have a valid span
+        let clusterRadius = totalSpan > 0 ? max(2000, min(100000, totalSpan * 0.08)) : 2000
         
         print("Total journey span: \(totalSpan/1000)km, cluster radius: \(clusterRadius/1000)km")
         
@@ -267,6 +275,11 @@ class ConstellationBuilder {
             return CGPoint(x: size.width / 2, y: size.height / 2)
         }
         
+        // Handle single location edge case
+        if allLocations.count == 1 {
+            return CGPoint(x: size.width / 2, y: size.height / 2)
+        }
+        
         var minLat = allLocations[0].latitude
         var maxLat = allLocations[0].latitude
         var minLon = allLocations[0].longitude
@@ -279,31 +292,44 @@ class ConstellationBuilder {
             maxLon = max(maxLon, loc.longitude)
         }
         
-        let latPadding = (maxLat - minLat) * 0.2
-        let lonPadding = (maxLon - minLon) * 0.2
+        let latRange = maxLat - minLat
+        let lonRange = maxLon - minLon
         
-        let paddedMinLat = minLat - latPadding
-        let paddedMaxLat = maxLat + latPadding
-        let paddedMinLon = minLon - lonPadding
-        let paddedMaxLon = maxLon + lonPadding
-        
-        let latRange = paddedMaxLat - paddedMinLat
-        let lonRange = paddedMaxLon - paddedMinLon
+        // Prevent division by zero - check BOTH ranges
+        if latRange == 0 && lonRange == 0 {
+            return CGPoint(x: size.width / 2, y: size.height / 2)
+        }
         
         let padding: CGFloat = 40
-        let usableWidth = size.width - (padding * 2)
-        let usableHeight = size.height - (padding * 2)
+        let availableWidth = size.width - (padding * 2)
+        let availableHeight = size.height - (padding * 2)
         
-        let normalizedLon = (location.longitude - paddedMinLon) / lonRange
-        let normalizedLat = (location.latitude - paddedMinLat) / latRange
+        // Handle cases where only one dimension has range
+        let x: CGFloat
+        let y: CGFloat
         
-        let x = padding + (normalizedLon * usableWidth)
-        let y = padding + ((1 - normalizedLat) * usableHeight)
+        if lonRange == 0 {
+            // All longitudes are the same - center horizontally
+            x = size.width / 2
+        } else {
+            // Normal longitude mapping
+            x = ((location.longitude - minLon) / lonRange) * availableWidth + padding
+        }
         
-        let clampedX = max(padding, min(size.width - padding, x))
-        let clampedY = max(padding, min(size.height - padding, y))
+        if latRange == 0 {
+            // All latitudes are the same - center vertically
+            y = size.height / 2
+        } else {
+            // Normal latitude mapping (inverted because latitude increases north)
+            y = ((maxLat - location.latitude) / latRange) * availableHeight + padding
+        }
         
-        return CGPoint(x: clampedX, y: clampedY)
+        // Final safety check for NaN
+        if x.isNaN || y.isNaN {
+            return CGPoint(x: size.width / 2, y: size.height / 2)
+        }
+        
+        return CGPoint(x: x, y: y)
     }
 }
 
@@ -325,10 +351,11 @@ struct ConstellationFullView: View {
     @State private var lastRotation: Angle = .zero
     @State private var offset: CGSize = .zero
     @State private var lastOffset: CGSize = .zero
+    let onDismiss: () -> Void
     
     var body: some View {
         ZStack {
-            Color.black.edgesIgnoringSafeArea(.top)
+            Color.black.ignoresSafeArea()
             
             // Background stars
             ForEach(Array(backgroundStars.enumerated()), id: \.offset) { index, star in
@@ -341,6 +368,20 @@ struct ConstellationFullView: View {
             VStack(spacing: 0) {
                 // MOVED: Controls to the TOP
                 HStack(spacing: 20) {
+                    Button(action: {
+                        onDismiss()
+                    }) {
+                        HStack {
+                            Image(systemName: "chevron.left")
+                            Text("Back")
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 12)
+                        .background(Color.white.opacity(0.2))
+                        .cornerRadius(12)
+                    }
+                    
                     Button(action: restart) {
                         HStack {
                             Image(systemName: "arrow.counterclockwise")
@@ -385,71 +426,72 @@ struct ConstellationFullView: View {
                         .foregroundColor(.white.opacity(0.9))
                 }
                 
-                Spacer()
+                Spacer(minLength: 20)
                 
                 if !photoLoader.locations.isEmpty {
-                    GeometryReader { geometry in
-                        let containerWidth = geometry.size.width
-                        let containerHeight: CGFloat = 500
-                        
+                    GeometryReader { geo in
                         FullConstellationDisplayView(
                             locations: photoLoader.locations,
                             progress: revealProgress,
                             stars: stars,
                             connections: connections,
-                            containerSize: CGSize(width: containerWidth, height: containerHeight)
+                            containerSize: CGSize(width: geo.size.width - 60, height: geo.size.height)
                         )
-                    }
-                    .frame(height: 500)
-                    .padding(.horizontal, 30)
-                    .offset(offset)
-                    .scaleEffect(scale)
-                    .rotationEffect(rotation)
-                    .contentShape(Rectangle())
-                    .gesture(
-                        SimultaneousGesture(
-                            DragGesture()
-                                .onChanged { value in
-                                    offset = CGSize(
-                                        width: lastOffset.width + value.translation.width,
-                                        height: lastOffset.height + value.translation.height
-                                    )
-                                }
-                                .onEnded { _ in
-                                    lastOffset = offset
-                                },
+                        .padding(.horizontal, 30)
+                        .scaleEffect(scale)
+                        .rotationEffect(rotation)
+                        .offset(offset)
+                        .contentShape(Rectangle())
+                        .gesture(
                             SimultaneousGesture(
-                                MagnificationGesture()
+                                DragGesture()
                                     .onChanged { value in
-                                        scale = lastScale * value
+                                        offset = CGSize(
+                                            width: lastOffset.width + value.translation.width,
+                                            height: lastOffset.height + value.translation.height
+                                        )
                                     }
-                                    .onEnded { value in
-                                        lastScale = scale
+                                    .onEnded { _ in
+                                        lastOffset = offset
                                     },
-                                RotationGesture()
-                                    .onChanged { value in
-                                        rotation = lastRotation + value
-                                    }
-                                    .onEnded { value in
-                                        lastRotation = rotation
-                                    }
+                                SimultaneousGesture(
+                                    MagnificationGesture()
+                                        .onChanged { value in
+                                            let newScale = lastScale * value
+                                            // Clamp scale between 0.5 and 5.0 to prevent crashes
+                                            scale = min(5.0, max(0.5, newScale))
+                                        }
+                                        .onEnded { value in
+                                            let newScale = lastScale * value
+                                            scale = min(5.0, max(0.5, newScale))
+                                            lastScale = scale
+                                        },
+                                    RotationGesture()
+                                        .onChanged { value in
+                                            rotation = lastRotation + value
+                                        }
+                                        .onEnded { value in
+                                            lastRotation = rotation
+                                        }
+                                )
                             )
                         )
-                    )
+                    }
                 }
                 
-                Spacer()
+                Spacer(minLength: 20)
                 
-                Text("\(stars.count) stars • Your unique pattern")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.7))
-                    .padding(.bottom, 5)
-                
-                Text("Drag to move • Pinch to zoom • Rotate with two fingers")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.5))
-                
-                Spacer(minLength: 30)
+                // Bottom text - now inside main VStack
+                VStack(spacing: 8) {
+                    Text("\(stars.count) stars • Your unique pattern")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.7))
+                    
+                    Text("Drag to move • Pinch to zoom • Rotate with two fingers")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.5))
+                }
+                .padding(.bottom, 40)
             }
         }
         .sheet(isPresented: $showShareSheet) {
@@ -504,7 +546,7 @@ struct ConstellationFullView: View {
         let snapshotView = ConstellationSnapshotView(
             locations: photoLoader.locations,
             locationCount: photoLoader.locations.count,
-            scale: scale,
+            scale: 1.0,
             rotation: rotation,
             backgroundStars: backgroundStars,
             stars: stars,
@@ -604,7 +646,15 @@ struct FullConstellationDisplayView: View {
     private func scaleStarsToContainer(stars: [ConstellationStar], containerSize: CGSize) -> [ConstellationStar] {
         guard !stars.isEmpty else { return [] }
         
-        // Find bounds
+        // Handle single star - return centered
+        if stars.count == 1 {
+            return [ConstellationStar(
+                coordinate: stars[0].coordinate,
+                intensity: stars[0].intensity,
+                screenPosition: CGPoint(x: containerSize.width / 2, y: containerSize.height / 2)
+            )]
+        }
+        
         var minX = stars[0].screenPosition.x
         var maxX = stars[0].screenPosition.x
         var minY = stars[0].screenPosition.y
@@ -620,7 +670,17 @@ struct FullConstellationDisplayView: View {
         let originalWidth = maxX - minX
         let originalHeight = maxY - minY
         
-        // Scale to fit with padding
+        // Prevent division by zero
+        guard originalWidth > 0 && originalHeight > 0 else {
+            return stars.map { star in
+                ConstellationStar(
+                    coordinate: star.coordinate,
+                    intensity: star.intensity,
+                    screenPosition: CGPoint(x: containerSize.width / 2, y: containerSize.height / 2)
+                )
+            }
+        }
+        
         let padding: CGFloat = 40
         let availableWidth = containerSize.width - (padding * 2)
         let availableHeight = containerSize.height - (padding * 2)
@@ -629,7 +689,6 @@ struct FullConstellationDisplayView: View {
         let scaleY = availableHeight / originalHeight
         let scaleFactor = min(scaleX, scaleY)
         
-        // Center in container
         let scaledWidth = originalWidth * scaleFactor
         let scaledHeight = originalHeight * scaleFactor
         let offsetX = (containerSize.width - scaledWidth) / 2
@@ -741,10 +800,13 @@ struct ConstellationSnapshotView: View {
                         .font(.system(size: 36, weight: .light))
                         .foregroundColor(.white.opacity(0.8))
                 }
+                .padding(.top, 60)
                 
-                // Scale the existing constellation to fit 800x800
+                Spacer()
+                
+                // Scale the existing constellation to fit in a larger area
                 ZStack {
-                    let scaledStars = scaleStarsToShareSize(stars: stars, targetSize: 800)
+                    let scaledStars = scaleStarsToShareSize(stars: stars, targetSize: 850)
                     let scaledConnections = scaleConnectionsToShareSize(connections: connections, stars: stars, scaledStars: scaledStars)
                     
                     // Draw connections
@@ -771,13 +833,15 @@ struct ConstellationSnapshotView: View {
                         FullConstellationStarView(star: star)
                     }
                 }
-                .frame(width: 800, height: 800)
-                .scaleEffect(scale)
+                .frame(width: 850, height: 850)
                 .rotationEffect(rotation)
+                
+                Spacer()
                 
                 Text("\(stars.count) stars • Mapped 2025")
                     .font(.system(size: 24))
                     .foregroundColor(.white.opacity(0.6))
+                    .padding(.bottom, 60)
                 
                 Spacer()
             }
@@ -788,6 +852,16 @@ struct ConstellationSnapshotView: View {
     // Scale stars from carousel size to share size (800x800)
     private func scaleStarsToShareSize(stars: [ConstellationStar], targetSize: CGFloat) -> [ConstellationStar] {
         guard !stars.isEmpty else { return [] }
+        
+        // Handle single star - return centered
+        if stars.count == 1 {
+            let center = targetSize / 2
+            return [ConstellationStar(
+                coordinate: stars[0].coordinate,
+                intensity: stars[0].intensity,
+                screenPosition: CGPoint(x: center, y: center)
+            )]
+        }
         
         // Find the original bounds
         var minX = stars[0].screenPosition.x
@@ -805,7 +879,19 @@ struct ConstellationSnapshotView: View {
         let originalWidth = maxX - minX
         let originalHeight = maxY - minY
         
-        // Calculate scale to fit in 800x800 with padding
+        // Prevent division by zero
+        guard originalWidth > 0 && originalHeight > 0 else {
+            let center = targetSize / 2
+            return stars.map { star in
+                ConstellationStar(
+                    coordinate: star.coordinate,
+                    intensity: star.intensity,
+                    screenPosition: CGPoint(x: center, y: center)
+                )
+            }
+        }
+        
+        // Calculate scale to fit in targetSize with padding
         let padding: CGFloat = 40
         let usableSize = targetSize - (padding * 2)
         let scaleX = usableSize / originalWidth

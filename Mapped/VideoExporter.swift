@@ -24,6 +24,9 @@ class VideoExporter: ObservableObject {
     private let videoSize = CGSize(width: 720, height: 1280)  // Fixed 9:16 at 720p
     private let fps: Int32 = 20
     
+    // FIXED photo sizes for video (NOT device-dependent)
+    private let fixedPhotoSizes: [CGFloat] = [55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 110]
+    
     // Fixed layout positions for consistent video
     private let collageStartY: CGFloat = 800
     private let mapHeight: CGFloat = 670
@@ -409,19 +412,19 @@ class VideoExporter: ObservableObject {
     private func generateCollageLayout(timestamps: [Date], locations: [CLLocationCoordinate2D]) {
         guard !photoItems.isEmpty, !timestamps.isEmpty else { return }
         
-        // Fixed positions for consistent 720x1280 video on all devices
-        let collageHeight: CGFloat = videoSize.height - collageStartY - 20  // ~460px height
-        let collageWidth: CGFloat = videoSize.width - 60  // 660px width
-        let collageX: CGFloat = 30  // 30px from left edge
+        // FIXED positions for consistent 720x1280 video on all devices
+        let collageHeight: CGFloat = 460  // Fixed: videoSize.height - collageStartY - 20
+        let collageWidth: CGFloat = 660   // Fixed: videoSize.width - 60
+        let collageX: CGFloat = 30        // Fixed: 30px from left edge
         
-        //   SCALED photo sizes for 720p
-        let photoSizes = ResponsiveLayout.photoSizes
+        // FIXED photo sizes for 720p (NOT scaled)
+        let photoSizes = fixedPhotoSizes
         
         var layout: [(image: UIImage, rect: CGRect, rotation: CGFloat, hasBorder: Bool, appearTime: Double, size: CGFloat, shape: PhotoShape)] = []
         
         let appearTimes = photoItems.map { findAppearTime(for: $0.date, in: timestamps) }
         
-        let bleedAmount = ResponsiveLayout.scale(70)
+        let bleedAmount: CGFloat = 70  // Fixed value
         let extendedHeight = collageHeight + (bleedAmount * 2)
         let extendedWidth = collageWidth + (bleedAmount * 2)
         
@@ -703,46 +706,118 @@ class VideoExporter: ObservableObject {
         return outputURL
     }
     
+    // Multi-region support
+    private struct MapRegion {
+        let locations: [CLLocationCoordinate2D]
+        let name: String
+        let center: CLLocationCoordinate2D
+        let span: MKCoordinateSpan
+    }
+
+    // ADD: Region detection function
+    private func detectRegions(from allLocations: [CLLocationCoordinate2D]) -> [MapRegion] {
+        guard !allLocations.isEmpty else { return [] }
+        
+        // Simple clustering by distance (10,000km threshold)
+        var clusters: [[CLLocationCoordinate2D]] = []
+        
+        for location in allLocations {
+            var addedToCluster = false
+            
+            for i in 0..<clusters.count {
+                // If location is within 10,000km of any location in cluster, add it
+                if clusters[i].contains(where: { existingLoc in
+                    let loc1 = CLLocation(latitude: location.latitude, longitude: location.longitude)
+                    let loc2 = CLLocation(latitude: existingLoc.latitude, longitude: existingLoc.longitude)
+                    let distance = loc1.distance(from: loc2)
+                    return distance < 10_000_000 // 10,000km threshold
+                }) {
+                    clusters[i].append(location)
+                    addedToCluster = true
+                    break
+                }
+            }
+            
+            if !addedToCluster {
+                clusters.append([location])
+            }
+        }
+        
+        // Sort clusters by size (largest first)
+        clusters.sort { $0.count > $1.count }
+        
+        // Create regions
+        return clusters.enumerated().map { index, locations in
+            let minLat = locations.map(\.latitude).min()!
+            let maxLat = locations.map(\.latitude).max()!
+            let minLon = locations.map(\.longitude).min()!
+            let maxLon = locations.map(\.longitude).max()!
+            
+            let center = CLLocationCoordinate2D(
+                latitude: (minLat + maxLat) / 2,
+                longitude: (minLon + maxLon) / 2
+            )
+            
+            let latPadding = (maxLat - minLat) * 0.2
+            let lonPadding = (maxLon - minLon) * 0.2
+            
+            let span = MKCoordinateSpan(
+                latitudeDelta: max((maxLat - minLat) + latPadding, 0.5),
+                longitudeDelta: max((maxLon - minLon) + lonPadding, 0.5)
+            )
+            
+            let regionName = index == 0 ? "Main" : "Region \(index + 1)"
+            
+            return MapRegion(locations: locations, name: regionName, center: center, span: span)
+        }
+    }
+
+    // ADD: Check if coordinate is in region
+    private func isCoordinate(_ coord: CLLocationCoordinate2D, inRegion region: MapRegion) -> Bool {
+        let minLat = region.locations.map(\.latitude).min() ?? 0
+        let maxLat = region.locations.map(\.latitude).max() ?? 0
+        let minLon = region.locations.map(\.longitude).min() ?? 0
+        let maxLon = region.locations.map(\.longitude).max() ?? 0
+        
+        let latBuffer = (maxLat - minLat) * 0.05
+        let lonBuffer = (maxLon - minLon) * 0.05
+        
+        return coord.latitude >= (minLat - latBuffer) &&
+               coord.latitude <= (maxLat + latBuffer) &&
+               coord.longitude >= (minLon - lonBuffer) &&
+               coord.longitude <= (maxLon + lonBuffer)
+    }
+    
     // MARK: - Map Snapshot Generation
     
-    private func generateMapSnapshot(locations: [CLLocationCoordinate2D], friends: [FriendData]) -> (image: UIImage, snapshot: MKMapSnapshotter.Snapshot)? {
+    private func generateMapSnapshot(locations: [CLLocationCoordinate2D], friends: [FriendData]) -> (image: UIImage, snapshot: MKMapSnapshotter.Snapshot, regions: [MapRegion], insetSnapshots: [(region: MapRegion, snapshot: MKMapSnapshotter.Snapshot)])? {
         var allLocations = locations
         
-        // Include friend locations for bounds calculation
         for friend in friends {
             allLocations.append(contentsOf: friend.coordinates)
         }
         
         guard !allLocations.isEmpty else { return nil }
         
-        let options = MKMapSnapshotter.Options()
+        let regions = detectRegions(from: allLocations)
+        print("🗺️ Detected \(regions.count) region(s) for video")
         
-        var minLat = allLocations[0].latitude
-        var maxLat = allLocations[0].latitude
-        var minLon = allLocations[0].longitude
-        var maxLon = allLocations[0].longitude
-        
-        for location in allLocations {
-            minLat = min(minLat, location.latitude)
-            maxLat = max(maxLat, location.latitude)
-            minLon = min(minLon, location.longitude)
-            maxLon = max(maxLon, location.longitude)
+        if regions.count == 1 {
+            // Single region
+            guard let result = generateSingleRegionSnapshot(region: regions[0]) else {
+                return nil
+            }
+            return (result.image, result.snapshot, regions, [])
+        } else {
+            // Multiple regions
+            return generateMultiRegionSnapshot(regions: regions, friends: friends, locations: locations)
         }
-        
-        let latPadding = (maxLat - minLat) * 0.2
-        let lonPadding = (maxLon - minLon) * 0.2
-        
-        let center = CLLocationCoordinate2D(
-            latitude: (minLat + maxLat) / 2,
-            longitude: (minLon + maxLon) / 2
-        )
-        
-        let span = MKCoordinateSpan(
-            latitudeDelta: (maxLat - minLat) + latPadding,
-            longitudeDelta: (maxLon - minLon) + lonPadding
-        )
-        
-        options.region = MKCoordinateRegion(center: center, span: span)
+    }
+
+    // ADD: Single region snapshot
+    private func generateSingleRegionSnapshot(region: MapRegion) -> (image: UIImage, snapshot: MKMapSnapshotter.Snapshot)? {
+        let options = MKMapSnapshotter.Options()
+        options.region = MKCoordinateRegion(center: region.center, span: region.span)
         options.size = CGSize(width: 700, height: 700)
         options.scale = 1.5
         
@@ -759,9 +834,448 @@ class VideoExporter: ObservableObject {
         semaphore.wait()
         return result
     }
+
+    // ADD: Multi-region snapshot with insets
+    private func generateMultiRegionSnapshot(regions: [MapRegion], friends: [FriendData], locations: [CLLocationCoordinate2D]) -> (image: UIImage, snapshot: MKMapSnapshotter.Snapshot, regions: [MapRegion], insetSnapshots: [(region: MapRegion, snapshot: MKMapSnapshotter.Snapshot)])? {
+        guard !regions.isEmpty else { return nil }
+        
+        let mainRegion = regions[0]
+        let insetRegions = Array(regions.dropFirst())
+        
+        // Generate main snapshot
+        let options = MKMapSnapshotter.Options()
+        options.region = MKCoordinateRegion(center: mainRegion.center, span: mainRegion.span)
+        options.size = CGSize(width: 700, height: 700)
+        options.scale = 1.5
+        
+        let snapshotter = MKMapSnapshotter(options: options)
+        let semaphore = DispatchSemaphore(value: 0)
+        var mainSnapshot: MKMapSnapshotter.Snapshot?
+        
+        snapshotter.start { snapshot, error in
+            defer { semaphore.signal() }
+            mainSnapshot = snapshot
+        }
+        semaphore.wait()
+        
+        guard let mainSnap = mainSnapshot else { return nil }
+        
+        // Generate inset snapshots
+        var insetSnapshots: [(region: MapRegion, snapshot: MKMapSnapshotter.Snapshot)] = []
+        
+        for insetRegion in insetRegions {
+            let insetOptions = MKMapSnapshotter.Options()
+            insetOptions.region = MKCoordinateRegion(center: insetRegion.center, span: insetRegion.span)
+            insetOptions.size = CGSize(width: 175, height: 175) // Smaller for video
+            insetOptions.scale = 1.5
+            
+            let insetSnapshotter = MKMapSnapshotter(options: insetOptions)
+            let insetSemaphore = DispatchSemaphore(value: 0)
+            var insetSnap: MKMapSnapshotter.Snapshot?
+            
+            insetSnapshotter.start { snapshot, error in
+                defer { insetSemaphore.signal() }
+                insetSnap = snapshot
+            }
+            insetSemaphore.wait()
+            
+            if let snap = insetSnap {
+                insetSnapshots.append((insetRegion, snap))
+            }
+        }
+        
+        // Composite the images
+        let compositeImage = createCompositeMapForVideo(
+            mainSnapshot: mainSnap,
+            mainRegion: mainRegion,
+            insetSnapshots: insetSnapshots
+        )
+        
+        return (compositeImage, mainSnap, regions, insetSnapshots)
+    }
+
+    // REPLACE createCompositeMapForVideo:
+    private func createCompositeMapForVideo(
+        mainSnapshot: MKMapSnapshotter.Snapshot,
+        mainRegion: MapRegion,
+        insetSnapshots: [(region: MapRegion, snapshot: MKMapSnapshotter.Snapshot)]
+    ) -> UIImage {
+        let size: CGFloat = 700
+        let format = UIGraphicsImageRendererFormat()
+        format.opaque = true
+        format.scale = 1.5
+        
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size), format: format)
+        
+        return renderer.image { context in
+            let ctx = context.cgContext
+            
+            // Draw main map
+            mainSnapshot.image.draw(in: CGRect(x: 0, y: 0, width: size, height: size))
+            
+            // SMART INSET POSITIONING - same positions we'll use in animation
+            let insetSize: CGFloat = 175
+            let padding: CGFloat = 15
+            let mapRect = CGRect(x: 0, y: 0, width: size, height: size)
+            
+            let positions = calculateSmartInsetPositions(
+                mainRegion: mainRegion,
+                mainSnapshot: mainSnapshot,
+                insetCount: insetSnapshots.count,
+                mapRect: mapRect,
+                scaledInsetSize: insetSize,
+                padding: padding
+            )
+            
+            // Use calculated positions for our insets
+            for (index, inset) in insetSnapshots.enumerated() {
+                guard index < positions.count else { break }
+                
+                let position = positions[index]
+                let insetRect = CGRect(x: position.x, y: position.y, width: insetSize, height: insetSize)
+                
+                // Shadow
+                ctx.setShadow(offset: CGSize(width: 0, height: 2), blur: 5, color: UIColor.black.withAlphaComponent(0.3).cgColor)
+                ctx.setFillColor(UIColor.white.cgColor)
+                ctx.fill(insetRect)
+                ctx.setShadow(offset: .zero, blur: 0, color: nil)
+                
+                // Draw inset map
+                inset.snapshot.image.draw(in: insetRect)
+                
+                // Border
+                ctx.setStrokeColor(UIColor.white.cgColor)
+                ctx.setLineWidth(3)
+                ctx.stroke(insetRect)
+                
+                // Label
+                let labelAttrs: [NSAttributedString.Key: Any] = [
+                    .font: UIFont.systemFont(ofSize: 12, weight: .bold),
+                    .foregroundColor: UIColor.white,
+                    .backgroundColor: UIColor.black.withAlphaComponent(0.7)
+                ]
+                let labelText = " \(inset.region.name) " as NSString
+                let labelSize = labelText.size(withAttributes: labelAttrs)
+                let labelRect = CGRect(
+                    x: position.x + 5,
+                    y: position.y + 5,
+                    width: labelSize.width,
+                    height: labelSize.height
+                )
+                labelText.draw(in: labelRect, withAttributes: labelAttrs)
+            }
+        }
+    }
+    
+    //Helper function to calculate smart inset positions (add near other helper functions):
+    private func calculateSmartInsetPositions(
+        mainRegion: MapRegion,
+        mainSnapshot: MKMapSnapshotter.Snapshot,
+        insetCount: Int,
+        mapRect: CGRect,
+        scaledInsetSize: CGFloat,
+        padding: CGFloat
+    ) -> [(x: CGFloat, y: CGFloat)] {
+        
+        let allPositions: [(x: CGFloat, y: CGFloat)] = [
+            (mapRect.maxX - scaledInsetSize - padding, mapRect.minY + padding), // top-right
+            (mapRect.maxX - scaledInsetSize - padding, mapRect.maxY - scaledInsetSize - padding), // bottom-right
+            (mapRect.minX + padding, mapRect.minY + padding), // top-left
+            (mapRect.minX + padding, mapRect.maxY - scaledInsetSize - padding) // bottom-left
+        ]
+        
+        var scoredPositions: [(position: (x: CGFloat, y: CGFloat), score: Int)] = []
+        
+        for pos in allPositions {
+            let testRect = CGRect(x: pos.x, y: pos.y, width: scaledInsetSize, height: scaledInsetSize)
+            
+            var pointsInArea = 0
+            for location in mainRegion.locations {
+                let point = mainSnapshot.point(for: location)
+                
+                // Scale the snapshot point to map coordinates
+                let snapshotSize = mainSnapshot.image.size
+                let scaleX = mapRect.width / snapshotSize.width
+                let scaleY = mapRect.height / snapshotSize.height
+                
+                let scaledPoint = CGPoint(
+                    x: mapRect.minX + (point.x * scaleX),
+                    y: mapRect.minY + (point.y * scaleY)
+                )
+                
+                if testRect.contains(scaledPoint) {
+                    pointsInArea += 1
+                }
+            }
+            
+            scoredPositions.append((position: pos, score: pointsInArea))
+        }
+        
+        scoredPositions.sort { $0.score < $1.score }
+        
+        return scoredPositions.prefix(insetCount).map { $0.position }
+    }
+    
+    //function to draw connector lines between regions:
+    // REPLACE the drawRegionConnectors function with clipping support:
+    private func drawRegionConnectors(
+        context: CGContext,
+        locations: [CLLocationCoordinate2D],
+        mainRegion: MapRegion,
+        insetSnapshots: [(region: MapRegion, snapshot: MKMapSnapshotter.Snapshot)],
+        insetPositions: [(x: CGFloat, y: CGFloat)],
+        mainSnapshot: MKMapSnapshotter.Snapshot,
+        mapRect: CGRect,
+        scaledInsetSize: CGFloat,
+        visiblePoints: Int,
+        userColor: UIColor
+    ) {
+        guard visiblePoints > 1 else { return }
+        
+        // Helper to get point on main map snapshot (even if off-screen)
+        func coordinateToMainMapPoint(_ coord: CLLocationCoordinate2D) -> CGPoint {
+            let snapshotPoint = mainSnapshot.point(for: coord)
+            let snapshotSize = mainSnapshot.image.size
+            let scaleX = mapRect.width / snapshotSize.width
+            let scaleY = mapRect.height / snapshotSize.height
+            
+            return CGPoint(
+                x: mapRect.minX + (snapshotPoint.x * scaleX),
+                y: mapRect.minY + (snapshotPoint.y * scaleY)
+            )
+        }
+        
+        // Track region transitions
+        for i in 1..<min(visiblePoints, locations.count) {
+            let prevLocation = locations[i - 1]
+            let currentLocation = locations[i]
+            
+            let prevInMain = isCoordinate(prevLocation, inRegion: mainRegion)
+            let currInMain = isCoordinate(currentLocation, inRegion: mainRegion)
+            
+            // Case 1: Jump FROM main TO inset
+            if prevInMain && !currInMain {
+                // Find which inset contains current location
+                for (insetIndex, insetData) in insetSnapshots.enumerated() {
+                    if isCoordinate(currentLocation, inRegion: insetData.region) {
+                        guard insetIndex < insetPositions.count else { break }
+                        
+                        // Get point in main map (where we're leaving from)
+                        let mainPoint = coordinateToMainMapPoint(prevLocation)
+                        
+                        // Get where the DESTINATION would be on the main map (even if off-screen)
+                        let destinationOnMainMap = coordinateToMainMapPoint(currentLocation)
+                        
+                        // Draw connector line to where it WOULD be on main map (CLIPPED to main map)
+                        drawConnectorLine(
+                            context: context,
+                            from: mainPoint,
+                            to: destinationOnMainMap,
+                            color: userColor,
+                            clipRect: mapRect
+                        )
+                        
+                        // Now draw second line from that off-screen point to the inset box
+                        let insetPosition = insetPositions[insetIndex]
+                        let insetRect = CGRect(x: insetPosition.x, y: insetPosition.y, width: scaledInsetSize, height: scaledInsetSize)
+                        let insetSnapshot = insetData.snapshot
+                        let insetSnapPoint = insetSnapshot.point(for: currentLocation)
+                        let insetPoint = CGPoint(
+                            x: insetRect.minX + (insetSnapPoint.x / insetSnapshot.image.size.width) * scaledInsetSize,
+                            y: insetRect.minY + (insetSnapPoint.y / insetSnapshot.image.size.height) * scaledInsetSize
+                        )
+                        
+                        // Draw line from off-screen main map position to inset (CLIPPED to inset)
+                        drawConnectorLine(
+                            context: context,
+                            from: destinationOnMainMap,
+                            to: insetPoint,
+                            color: userColor,
+                            style: .toInset,
+                            clipRect: insetRect
+                        )
+                        break
+                    }
+                }
+            }
+            
+            // Case 2: Jump FROM inset BACK TO main
+            if !prevInMain && currInMain {
+                // Find which inset contains previous location
+                for (insetIndex, insetData) in insetSnapshots.enumerated() {
+                    if isCoordinate(prevLocation, inRegion: insetData.region) {
+                        guard insetIndex < insetPositions.count else { break }
+                        
+                        // Get point in inset
+                        let insetPosition = insetPositions[insetIndex]
+                        let insetRect = CGRect(x: insetPosition.x, y: insetPosition.y, width: scaledInsetSize, height: scaledInsetSize)
+                        let insetSnapshot = insetData.snapshot
+                        let insetSnapPoint = insetSnapshot.point(for: prevLocation)
+                        let insetPoint = CGPoint(
+                            x: insetRect.minX + (insetSnapPoint.x / insetSnapshot.image.size.width) * scaledInsetSize,
+                            y: insetRect.minY + (insetSnapPoint.y / insetSnapshot.image.size.height) * scaledInsetSize
+                        )
+                        
+                        // Get where we're leaving FROM on the main map (off-screen)
+                        let departureOnMainMap = coordinateToMainMapPoint(prevLocation)
+                        
+                        // Get where we're arriving TO on the main map
+                        let mainPoint = coordinateToMainMapPoint(currentLocation)
+                        
+                        // Draw line from inset to off-screen position (CLIPPED to inset)
+                        drawConnectorLine(
+                            context: context,
+                            from: insetPoint,
+                            to: departureOnMainMap,
+                            color: userColor,
+                            style: .fromInset,
+                            clipRect: insetRect
+                        )
+                        
+                        // Draw line from off-screen to actual main map point (CLIPPED to main map)
+                        drawConnectorLine(
+                            context: context,
+                            from: departureOnMainMap,
+                            to: mainPoint,
+                            color: userColor,
+                            clipRect: mapRect
+                        )
+                        break
+                    }
+                }
+            }
+            
+            // Case 3: Jump FROM one inset TO another inset
+            if !prevInMain && !currInMain {
+                var prevInsetIndex: Int?
+                var currInsetIndex: Int?
+                
+                for (insetIndex, insetData) in insetSnapshots.enumerated() {
+                    if isCoordinate(prevLocation, inRegion: insetData.region) {
+                        prevInsetIndex = insetIndex
+                    }
+                    if isCoordinate(currentLocation, inRegion: insetData.region) {
+                        currInsetIndex = insetIndex
+                    }
+                }
+                
+                if let prevIdx = prevInsetIndex, let currIdx = currInsetIndex, prevIdx != currIdx {
+                    guard prevIdx < insetPositions.count && currIdx < insetPositions.count else { continue }
+                    
+                    // Get point in previous inset
+                    let prevInsetPos = insetPositions[prevIdx]
+                    let prevInsetRect = CGRect(x: prevInsetPos.x, y: prevInsetPos.y, width: scaledInsetSize, height: scaledInsetSize)
+                    let prevInsetSnapshot = insetSnapshots[prevIdx].snapshot
+                    let prevSnapPoint = prevInsetSnapshot.point(for: prevLocation)
+                    let prevPoint = CGPoint(
+                        x: prevInsetRect.minX + (prevSnapPoint.x / prevInsetSnapshot.image.size.width) * scaledInsetSize,
+                        y: prevInsetRect.minY + (prevSnapPoint.y / prevInsetSnapshot.image.size.height) * scaledInsetSize
+                    )
+                    
+                    // Where prev location would be on main map (off-screen)
+                    let prevOnMainMap = coordinateToMainMapPoint(prevLocation)
+                    
+                    // Where current location would be on main map (off-screen)
+                    let currOnMainMap = coordinateToMainMapPoint(currentLocation)
+                    
+                    // Get point in current inset
+                    let currInsetPos = insetPositions[currIdx]
+                    let currInsetRect = CGRect(x: currInsetPos.x, y: currInsetPos.y, width: scaledInsetSize, height: scaledInsetSize)
+                    let currInsetSnapshot = insetSnapshots[currIdx].snapshot
+                    let currSnapPoint = currInsetSnapshot.point(for: currentLocation)
+                    let currPoint = CGPoint(
+                        x: currInsetRect.minX + (currSnapPoint.x / currInsetSnapshot.image.size.width) * scaledInsetSize,
+                        y: currInsetRect.minY + (currSnapPoint.y / currInsetSnapshot.image.size.height) * scaledInsetSize
+                    )
+                    
+                    // Draw: prev inset -> off-screen prev (CLIPPED to prev inset)
+                    drawConnectorLine(
+                        context: context,
+                        from: prevPoint,
+                        to: prevOnMainMap,
+                        color: userColor,
+                        style: .fromInset,
+                        clipRect: prevInsetRect
+                    )
+                    
+                    // Draw: off-screen prev -> off-screen curr (CLIPPED to main map)
+                    drawConnectorLine(
+                        context: context,
+                        from: prevOnMainMap,
+                        to: currOnMainMap,
+                        color: userColor,
+                        clipRect: mapRect
+                    )
+                    
+                    // Draw: off-screen curr -> curr inset (CLIPPED to curr inset)
+                    drawConnectorLine(
+                        context: context,
+                        from: currOnMainMap,
+                        to: currPoint,
+                        color: userColor,
+                        style: .toInset,
+                        clipRect: currInsetRect
+                    )
+                }
+            }
+        }
+    }
+
+    // helper to draw a single connector line:
+    private func drawConnectorLine(
+        context: CGContext,
+        from: CGPoint,
+        to: CGPoint,
+        color: UIColor,
+        style: ConnectorStyle = .normal,
+        clipRect: CGRect? = nil
+    ) {
+        context.saveGState()
+        
+        // Apply clipping if provided
+        if let clipRect = clipRect {
+            context.clip(to: clipRect)
+        }
+        
+        // Different styles for different parts
+        switch style {
+        case .normal:
+            // Main travel line - solid, more visible
+            context.setStrokeColor(color.withAlphaComponent(0.8).cgColor)
+            context.setLineWidth(2.5)
+            context.setLineDash(phase: 0, lengths: [6, 3])
+        case .toInset, .fromInset:
+            // Line connecting to inset box - lighter, more subtle
+            context.setStrokeColor(color.withAlphaComponent(0.5).cgColor)
+            context.setLineWidth(1.5)
+            context.setLineDash(phase: 0, lengths: [3, 3])
+        }
+        
+        context.setLineCap(.round)
+        
+        context.move(to: from)
+        context.addLine(to: to)
+        context.strokePath()
+        
+        // Draw small circle at endpoints (only for normal style and if within bounds)
+        if style == .normal {
+            let circleRadius: CGFloat = 4
+            context.setLineDash(phase: 0, lengths: []) // solid for circles
+            context.setFillColor(color.cgColor)
+            
+            // Only draw circles if they're within the clip rect
+            if clipRect == nil || clipRect!.contains(from) {
+                context.fillEllipse(in: CGRect(x: from.x - circleRadius, y: from.y - circleRadius, width: circleRadius * 2, height: circleRadius * 2))
+            }
+            if clipRect == nil || clipRect!.contains(to) {
+                context.fillEllipse(in: CGRect(x: to.x - circleRadius, y: to.y - circleRadius, width: circleRadius * 2, height: circleRadius * 2))
+            }
+        }
+        
+        context.restoreGState()
+    }
     
     // MARK: - Frame Generation
-    
     
     private func createFrame(
         phase: VideoPhase,
@@ -769,7 +1283,7 @@ class VideoExporter: ObservableObject {
         totalPhaseFrames: Int,
         locations: [CLLocationCoordinate2D],
         statistics: [String: String],
-        mapData: (image: UIImage, snapshot: MKMapSnapshotter.Snapshot)?,
+        mapData: (image: UIImage, snapshot: MKMapSnapshotter.Snapshot, regions: [MapRegion], insetSnapshots: [(region: MapRegion, snapshot: MKMapSnapshotter.Snapshot)])?,
         friends: [FriendData]
     ) -> CVPixelBuffer? {
         
@@ -829,70 +1343,70 @@ class VideoExporter: ObservableObject {
             )
         }
     }
+    
+    // MARK: - Draw Intro
     private func drawIntro(context: CGContext, frame: Int, totalFrames: Int) {
         let progress = easeInOut(Double(frame) / Double(totalFrames))
         let alpha = min(1.0, progress * 1.5)
         
+        // FIXED font sizes (NOT responsive)
         let yearAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: ResponsiveLayout.dynamicFontSize(base: 80), weight: .black),
+            .font: UIFont.systemFont(ofSize: 80, weight: .black),
             .foregroundColor: UIColor.white.withAlphaComponent(alpha)
         ]
         
         let year = "2025"
         let yearSize = year.size(withAttributes: yearAttrs)
-        let yearY = videoSize.height / 2 - yearSize.height - ResponsiveLayout.scale(20)
+        let yearY = videoSize.height / 2 - yearSize.height - 20
         year.draw(
             at: CGPoint(x: (videoSize.width - yearSize.width) / 2, y: yearY),
             withAttributes: yearAttrs
         )
         
         let mappedAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: ResponsiveLayout.dynamicFontSize(base: 55), weight: .medium),
+            .font: UIFont.systemFont(ofSize: 55, weight: .medium),
             .foregroundColor: UIColor.white.withAlphaComponent(alpha * 0.9)
         ]
         
         let mapped = "Mapped"
         let mappedSize = mapped.size(withAttributes: mappedAttrs)
         mapped.draw(
-            at: CGPoint(x: (videoSize.width - mappedSize.width) / 2, y: yearY + yearSize.height + ResponsiveLayout.scale(10)),
+            at: CGPoint(x: (videoSize.width - mappedSize.width) / 2, y: yearY + yearSize.height + 10),
             withAttributes: mappedAttrs
         )
     }
     
+    // MARK: - Draw Map Animation
+    // MARK: - Draw Map Animation
     private func drawMapAnimation(
         context: CGContext,
         frame: Int,
         totalFrames: Int,
         locations: [CLLocationCoordinate2D],
-        mapData: (image: UIImage, snapshot: MKMapSnapshotter.Snapshot)?,
+        mapData: (image: UIImage, snapshot: MKMapSnapshotter.Snapshot, regions: [MapRegion], insetSnapshots: [(region: MapRegion, snapshot: MKMapSnapshotter.Snapshot)])?,
         friends: [FriendData]
     ) {
         guard !locations.isEmpty else { return }
         
         let progress = Double(frame) / Double(totalFrames)
         
-        // Map area
-        let mapRect = CGRect(
-            x: ResponsiveLayout.scaleWidth(30),
-            y: ResponsiveLayout.scaleHeight(100),
-            width: videoSize.width - ResponsiveLayout.scaleWidth(60),
-            height: ResponsiveLayout.scaleHeight(670)
-        )
+        let mapRect = CGRect(x: 30, y: 100, width: 660, height: 670)
         
+        // Draw base map (already has insets if multi-region)
         if let snapshot = mapData?.image {
             context.saveGState()
             context.addPath(CGPath(roundedRect: mapRect, cornerWidth: 15, cornerHeight: 15, transform: nil))
             context.clip()
             snapshot.draw(in: mapRect)
             context.restoreGState()
-        } else {
-            context.setFillColor(UIColor.white.withAlphaComponent(0.1).cgColor)
-            context.addPath(CGPath(roundedRect: mapRect, cornerWidth: 15, cornerHeight: 15, transform: nil))
-            context.fillPath()
         }
         
-        guard let snapshotObj = mapData?.snapshot else { return }
+        guard let snapshotObj = mapData?.snapshot,
+              let regions = mapData?.regions else { return }
         
+        let mainRegion = regions[0]
+        
+        // Helper to convert coordinate to point on main map
         func coordinateToPoint(_ coord: CLLocationCoordinate2D) -> CGPoint {
             let snapshotPoint = snapshotObj.point(for: coord)
             let snapshotSize = mapData?.image.size ?? CGSize(width: 700, height: 700)
@@ -905,205 +1419,421 @@ class VideoExporter: ObservableObject {
             )
         }
         
-        // Draw friend paths FIRST (underneath your path)
+        let visiblePoints = Int(ceil(Double(locations.count) * progress))
+        
+        // Draw friend paths and dots (both in main region AND insets)
         for friend in friends {
             let friendLocations = friend.coordinates
             guard !friendLocations.isEmpty else { continue }
             
-            let friendVisiblePoints = max(2, Int(Double(friendLocations.count) * progress))
+            let friendVisiblePoints = Int(ceil(Double(friendLocations.count) * progress))
+            let friendColor = UIColor(hex: friend.color) ?? UIColor.systemRed
             
-            context.saveGState()
-            if let friendColor = UIColor(hex: friend.color) {
+            // Draw in MAIN region
+            let friendMainLocs = friendLocations.filter { isCoordinate($0, inRegion: mainRegion) }
+            if !friendMainLocs.isEmpty {
+                context.saveGState()
                 context.setStrokeColor(friendColor.cgColor)
-            } else {
-                context.setStrokeColor(UIColor.systemRed.cgColor)
+                context.setLineWidth(3)
+                context.setLineCap(.round)
+                context.setLineJoin(.round)
+                
+                var drawnCount = 0
+                for loc in friendMainLocs {
+                    if drawnCount >= friendVisiblePoints { break }
+                    let point = coordinateToPoint(loc)
+                    if drawnCount == 0 {
+                        context.move(to: point)
+                    } else {
+                        context.addLine(to: point)
+                    }
+                    drawnCount += 1
+                }
+                
+                context.strokePath()
+                context.restoreGState()
+                
+                // Draw dots
+                context.saveGState()
+                drawnCount = 0
+                for loc in friendMainLocs {
+                    if drawnCount >= friendVisiblePoints { break }
+                    let point = coordinateToPoint(loc)
+                    context.setFillColor(friendColor.cgColor)
+                    context.fillEllipse(in: CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8))
+                    context.setStrokeColor(UIColor.white.cgColor)
+                    context.setLineWidth(1)
+                    context.strokeEllipse(in: CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8))
+                    drawnCount += 1
+                }
+                context.restoreGState()
             }
-            context.setLineWidth(ResponsiveLayout.scale(3))
+            
+            // Draw friend walker in main region
+            if friendVisiblePoints > 0 {
+                let visibleMainLocs = friendMainLocs.prefix(friendVisiblePoints)
+                if let lastLoc = visibleMainLocs.last {
+                    let point = coordinateToPoint(lastLoc)
+                    context.setFillColor(friendColor.cgColor)
+                    context.fillEllipse(in: CGRect(x: point.x - 8, y: point.y - 8, width: 16, height: 16))
+                    context.setStrokeColor(UIColor.white.cgColor)
+                    context.setLineWidth(2)
+                    context.strokeEllipse(in: CGRect(x: point.x - 8, y: point.y - 8, width: 16, height: 16))
+                }
+            }
+        }
+        
+        // Draw YOUR path in main region
+        let userMainLocs = locations.filter { isCoordinate($0, inRegion: mainRegion) }
+        if !userMainLocs.isEmpty {
+            context.saveGState()
+            let userColor = UIColor(hex: snapshotUserColor) ?? UIColor.systemBlue
+            context.setStrokeColor(userColor.cgColor)
+            context.setLineWidth(4)
             context.setLineCap(.round)
             context.setLineJoin(.round)
             
-            let friendFirstPoint = coordinateToPoint(friendLocations[0])
-            context.move(to: friendFirstPoint)
-            
-            for i in 1..<min(friendVisiblePoints, friendLocations.count) {
-                let point = coordinateToPoint(friendLocations[i])
-                context.addLine(to: point)
+            var drawnCount = 0
+            for loc in userMainLocs {
+                if drawnCount >= visiblePoints { break }
+                let point = coordinateToPoint(loc)
+                if drawnCount == 0 {
+                    context.move(to: point)
+                } else {
+                    context.addLine(to: point)
+                }
+                drawnCount += 1
             }
             
             context.strokePath()
             context.restoreGState()
             
-            // Draw friend pins
+            // Draw YOUR dots
             context.saveGState()
-            let friendDotSize: CGFloat = ResponsiveLayout.scale(8)
-            let friendDotRadius = friendDotSize / 2
-            for i in 0..<min(friendVisiblePoints, friendLocations.count) {
-                let point = coordinateToPoint(friendLocations[i])
-                
-                if let friendColor = UIColor(hex: friend.color) {
-                    context.setFillColor(friendColor.cgColor)
-                } else {
-                    context.setFillColor(UIColor.systemRed.cgColor)
-                }
-                context.fillEllipse(in: CGRect(x: point.x - friendDotRadius, y: point.y - friendDotRadius, width: friendDotSize, height: friendDotSize))
-                
+            drawnCount = 0
+            for loc in userMainLocs {
+                if drawnCount >= visiblePoints { break }
+                let point = coordinateToPoint(loc)
+                context.setFillColor(userColor.cgColor)
+                context.fillEllipse(in: CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10))
                 context.setStrokeColor(UIColor.white.cgColor)
-                context.setLineWidth(ResponsiveLayout.scale(1))
-                context.strokeEllipse(in: CGRect(x: point.x - friendDotRadius, y: point.y - friendDotRadius, width: friendDotSize, height: friendDotSize))
+                context.setLineWidth(1.5)
+                context.strokeEllipse(in: CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10))
+                drawnCount += 1
             }
             context.restoreGState()
-            
-            // Draw friend current walker
-            if friendVisiblePoints < friendLocations.count {
-                let currentPoint = coordinateToPoint(friendLocations[friendVisiblePoints])
+        }
+        
+        // Draw YOUR walker in main region
+        if visiblePoints > 0 {
+            let visibleMainLocs = userMainLocs.prefix(visiblePoints)
+            if let lastLoc = visibleMainLocs.last {
+                let point = coordinateToPoint(lastLoc)
+                let userColor = UIColor(hex: snapshotUserColor) ?? UIColor.systemBlue
                 
-                let friendWalkerSize: CGFloat = ResponsiveLayout.scale(16)
-                let friendWalkerRadius = friendWalkerSize / 2
-                
-                if let friendColor = UIColor(hex: friend.color) {
-                    context.setFillColor(friendColor.cgColor)
-                } else {
-                    context.setFillColor(UIColor.systemRed.cgColor)
-                }
-                context.fillEllipse(in: CGRect(x: currentPoint.x - friendWalkerRadius, y: currentPoint.y - friendWalkerRadius, width: friendWalkerSize, height: friendWalkerSize))
+                context.setFillColor(userColor.cgColor)
+                context.fillEllipse(in: CGRect(x: point.x - 10, y: point.y - 10, width: 20, height: 20))
                 context.setStrokeColor(UIColor.white.cgColor)
-                context.setLineWidth(ResponsiveLayout.scale(2))
-                context.strokeEllipse(in: CGRect(x: currentPoint.x - friendWalkerRadius, y: currentPoint.y - friendWalkerRadius, width: friendWalkerSize, height: friendWalkerSize))
+                context.setLineWidth(2)
+                context.strokeEllipse(in: CGRect(x: point.x - 10, y: point.y - 10, width: 20, height: 20))
+                
+                // Draw emoji
+                let emojiAttrs: [NSAttributedString.Key: Any] = [
+                    .font: UIFont.systemFont(ofSize: 12)
+                ]
+                let emojiSize = snapshotUserEmoji.size(withAttributes: emojiAttrs)
+                snapshotUserEmoji.draw(at: CGPoint(x: point.x - emojiSize.width/2, y: point.y - emojiSize.height/2), withAttributes: emojiAttrs)
             }
         }
         
-        // Draw YOUR path - USE SNAPSHOT COLOR
-        let visiblePoints = max(2, Int(Double(locations.count) * progress))
-        
-        context.saveGState()
-        if let userUIColor = UIColor(hex: snapshotUserColor) {
-            context.setStrokeColor(userUIColor.cgColor)
-        } else {
-            context.setStrokeColor(UIColor.systemBlue.cgColor)
-        }
-        context.setLineWidth(ResponsiveLayout.scale(4))
-        context.setLineCap(.round)
-        context.setLineJoin(.round)
-        
-        let firstPoint = coordinateToPoint(locations[0])
-        context.move(to: firstPoint)
-        
-        for i in 1..<min(visiblePoints, locations.count) {
-            let point = coordinateToPoint(locations[i])
-            context.addLine(to: point)
-        }
-        
-        context.strokePath()
-        context.restoreGState()
-        
-        // Draw YOUR pins - USE SNAPSHOT COLOR
-        context.saveGState()
-        let dotSize: CGFloat = ResponsiveLayout.scale(10)
-        let dotRadius = dotSize / 2
-        for i in 0..<min(visiblePoints, locations.count) {
-            let point = coordinateToPoint(locations[i])
+        // NOW draw paths/dots in INSET regions WITH ANIMATION
+        if let insetSnapshots = mapData?.insetSnapshots, !insetSnapshots.isEmpty {
+            let baseInsetSize: CGFloat = 175
+            let scaledInsetSize = (baseInsetSize / 700) * mapRect.width
+            let padding: CGFloat = 15
             
-            if let userUIColor = UIColor(hex: snapshotUserColor) {
-                context.setFillColor(userUIColor.cgColor)
-            } else {
-                context.setFillColor(UIColor.systemRed.cgColor)
+            // Use the SAME smart positioning function
+            let positions = calculateSmartInsetPositions(
+                mainRegion: mainRegion,
+                mainSnapshot: snapshotObj,
+                insetCount: insetSnapshots.count,
+                mapRect: mapRect,
+                scaledInsetSize: scaledInsetSize,
+                padding: padding
+            )
+            
+            // Determine which region the current walker is in
+            var currentWalkerRegion: MapRegion?
+            if visiblePoints > 0 && visiblePoints <= locations.count {
+                let currentLocation = locations[visiblePoints - 1]
+                
+                // Check which inset region contains the current location
+                for insetData in insetSnapshots {
+                    if isCoordinate(currentLocation, inRegion: insetData.region) {
+                        currentWalkerRegion = insetData.region
+                        break
+                    }
+                }
             }
-            context.fillEllipse(in: CGRect(x: point.x - dotRadius, y: point.y - dotRadius, width: dotSize, height: dotSize))
             
-            context.setStrokeColor(UIColor.white.cgColor)
-            context.setLineWidth(ResponsiveLayout.scale(1.5))
-            context.strokeEllipse(in: CGRect(x: point.x - dotRadius, y: point.y - dotRadius, width: dotSize, height: dotSize))
-        }
-        context.restoreGState()
-        
-        // Draw YOUR current walker - USE SNAPSHOT EMOJI AND COLOR
-        if visiblePoints < locations.count {
-            let currentPoint = coordinateToPoint(locations[visiblePoints])
-            
-            let walkerSize: CGFloat = ResponsiveLayout.scale(20)
-            let walkerRadius = walkerSize / 2
-            
-            // Background circle with custom color
-            if let userUIColor = UIColor(hex: snapshotUserColor) {
-                context.setFillColor(userUIColor.cgColor)
-            } else {
-                context.setFillColor(UIColor.systemBlue.cgColor)
+            // Draw each inset with animation
+            for (index, insetData) in insetSnapshots.enumerated() {
+                guard index < positions.count else { break }
+                
+                let position = positions[index]
+                let insetRect = CGRect(x: position.x, y: position.y, width: scaledInsetSize, height: scaledInsetSize)
+                let insetRegion = insetData.region
+                let insetSnapshot = insetData.snapshot
+                
+                // Check if this is the region containing the current walker
+                let isCurrentWalkerRegion = (currentWalkerRegion?.name == insetRegion.name)
+                
+                // Draw friend paths in inset WITH ANIMATION
+                for friend in friends {
+                    let friendColor = UIColor(hex: friend.color) ?? UIColor.systemRed
+                    
+                    // Get ALL friend locations in order, then filter to this SPECIFIC inset region
+                    var friendInsetLocsWithIndices: [(coord: CLLocationCoordinate2D, originalIndex: Int)] = []
+                    for (idx, coord) in friend.coordinates.enumerated() {
+                        if isCoordinate(coord, inRegion: insetRegion) {
+                            friendInsetLocsWithIndices.append((coord, idx))
+                        }
+                    }
+                    
+                    guard !friendInsetLocsWithIndices.isEmpty else { continue }
+                    
+                    // Calculate how many of THIS friend's locations should be visible
+                    let totalFriendLocs = friend.coordinates.count
+                    let friendVisiblePoints = Int(ceil(Double(totalFriendLocs) * progress))
+                    
+                    // Filter to only show locations up to the visible index
+                    let visibleInsetLocs = friendInsetLocsWithIndices.filter { $0.originalIndex < friendVisiblePoints }
+                    
+                    guard !visibleInsetLocs.isEmpty else { continue }
+                    
+                    // Draw path
+                    context.saveGState()
+                    context.setStrokeColor(friendColor.cgColor)
+                    context.setLineWidth(2)
+                    context.setLineCap(.round)
+                    context.setLineJoin(.round)
+                    
+                    for (loopIndex, item) in visibleInsetLocs.enumerated() {
+                        let snapPoint = insetSnapshot.point(for: item.coord)
+                        let point = CGPoint(
+                            x: insetRect.minX + (snapPoint.x / insetSnapshot.image.size.width) * scaledInsetSize,
+                            y: insetRect.minY + (snapPoint.y / insetSnapshot.image.size.height) * scaledInsetSize
+                        )
+                        if loopIndex == 0 {
+                            context.move(to: point)
+                        } else {
+                            context.addLine(to: point)
+                        }
+                    }
+                    
+                    context.strokePath()
+                    context.restoreGState()
+                    
+                    // Draw dots
+                    context.saveGState()
+                    for item in visibleInsetLocs {
+                        let snapPoint = insetSnapshot.point(for: item.coord)
+                        let point = CGPoint(
+                            x: insetRect.minX + (snapPoint.x / insetSnapshot.image.size.width) * scaledInsetSize,
+                            y: insetRect.minY + (snapPoint.y / insetSnapshot.image.size.height) * scaledInsetSize
+                        )
+                        context.setFillColor(friendColor.cgColor)
+                        context.fillEllipse(in: CGRect(x: point.x - 3, y: point.y - 3, width: 6, height: 6))
+                        context.setStrokeColor(UIColor.white.cgColor)
+                        context.setLineWidth(1)
+                        context.strokeEllipse(in: CGRect(x: point.x - 3, y: point.y - 3, width: 6, height: 6))
+                    }
+                    context.restoreGState()
+                    
+                    // Only draw friend walker if they're currently in THIS region
+                    if friendVisiblePoints > 0 && friendVisiblePoints <= friend.coordinates.count {
+                        let currentFriendLocation = friend.coordinates[friendVisiblePoints - 1]
+                        let isFriendCurrentlyHere = isCoordinate(currentFriendLocation, inRegion: insetRegion)
+                        
+                        if isFriendCurrentlyHere, let lastVisibleItem = visibleInsetLocs.last {
+                            let snapPoint = insetSnapshot.point(for: lastVisibleItem.coord)
+                            let point = CGPoint(
+                                x: insetRect.minX + (snapPoint.x / insetSnapshot.image.size.width) * scaledInsetSize,
+                                y: insetRect.minY + (snapPoint.y / insetSnapshot.image.size.height) * scaledInsetSize
+                            )
+                            
+                            context.saveGState()
+                            context.setFillColor(friendColor.cgColor)
+                            context.fillEllipse(in: CGRect(x: point.x - 6, y: point.y - 6, width: 12, height: 12))
+                            context.setStrokeColor(UIColor.white.cgColor)
+                            context.setLineWidth(1.5)
+                            context.strokeEllipse(in: CGRect(x: point.x - 6, y: point.y - 6, width: 12, height: 12))
+                            context.restoreGState()
+                        }
+                    }
+                }
+                
+                // Draw YOUR path in inset WITH ANIMATION
+                let userColor = UIColor(hex: snapshotUserColor) ?? UIColor.systemBlue
+                
+                // Get YOUR locations with indices for THIS SPECIFIC inset region
+                var userInsetLocsWithIndices: [(coord: CLLocationCoordinate2D, originalIndex: Int)] = []
+                for (idx, coord) in locations.enumerated() {
+                    if isCoordinate(coord, inRegion: insetRegion) {
+                        userInsetLocsWithIndices.append((coord, idx))
+                    }
+                }
+                
+                guard !userInsetLocsWithIndices.isEmpty else { continue }
+                
+                // Filter to visible points
+                let visibleUserInsetLocs = userInsetLocsWithIndices.filter { $0.originalIndex < visiblePoints }
+                
+                guard !visibleUserInsetLocs.isEmpty else { continue }
+                
+                // Draw path
+                context.saveGState()
+                context.setStrokeColor(userColor.cgColor)
+                context.setLineWidth(2)
+                context.setLineCap(.round)
+                context.setLineJoin(.round)
+                
+                for (loopIndex, item) in visibleUserInsetLocs.enumerated() {
+                    let snapPoint = insetSnapshot.point(for: item.coord)
+                    let point = CGPoint(
+                        x: insetRect.minX + (snapPoint.x / insetSnapshot.image.size.width) * scaledInsetSize,
+                        y: insetRect.minY + (snapPoint.y / insetSnapshot.image.size.height) * scaledInsetSize
+                    )
+                    if loopIndex == 0 {
+                        context.move(to: point)
+                    } else {
+                        context.addLine(to: point)
+                    }
+                }
+                
+                context.strokePath()
+                context.restoreGState()
+                
+                // Draw YOUR dots in inset
+                context.saveGState()
+                for item in visibleUserInsetLocs {
+                    let snapPoint = insetSnapshot.point(for: item.coord)
+                    let point = CGPoint(
+                        x: insetRect.minX + (snapPoint.x / insetSnapshot.image.size.width) * scaledInsetSize,
+                        y: insetRect.minY + (snapPoint.y / insetSnapshot.image.size.height) * scaledInsetSize
+                    )
+                    context.setFillColor(userColor.cgColor)
+                    context.fillEllipse(in: CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8))
+                    context.setStrokeColor(UIColor.white.cgColor)
+                    context.setLineWidth(1)
+                    context.strokeEllipse(in: CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8))
+                }
+                context.restoreGState()
+                
+                // Draw YOUR walker ONLY if you're currently in THIS region
+                if isCurrentWalkerRegion, let lastVisibleItem = visibleUserInsetLocs.last {
+                    let snapPoint = insetSnapshot.point(for: lastVisibleItem.coord)
+                    let point = CGPoint(
+                        x: insetRect.minX + (snapPoint.x / insetSnapshot.image.size.width) * scaledInsetSize,
+                        y: insetRect.minY + (snapPoint.y / insetSnapshot.image.size.height) * scaledInsetSize
+                    )
+                    
+                    context.saveGState()
+                    context.setFillColor(userColor.cgColor)
+                    context.fillEllipse(in: CGRect(x: point.x - 8, y: point.y - 8, width: 16, height: 16))
+                    context.setStrokeColor(UIColor.white.cgColor)
+                    context.setLineWidth(2)
+                    context.strokeEllipse(in: CGRect(x: point.x - 8, y: point.y - 8, width: 16, height: 16))
+                    
+                    // Draw emoji
+                    let emojiAttrs: [NSAttributedString.Key: Any] = [
+                        .font: UIFont.systemFont(ofSize: 8)  // Smaller for inset
+                    ]
+                    let emojiSize = snapshotUserEmoji.size(withAttributes: emojiAttrs)
+                    snapshotUserEmoji.draw(at: CGPoint(x: point.x - emojiSize.width/2, y: point.y - emojiSize.height/2), withAttributes: emojiAttrs)
+                    
+                    context.restoreGState()
+                }
             }
-            context.fillEllipse(in: CGRect(x: currentPoint.x - walkerRadius, y: currentPoint.y - walkerRadius, width: walkerSize, height: walkerSize))
-            context.setStrokeColor(UIColor.white.cgColor)
-            context.setLineWidth(ResponsiveLayout.scale(2))
-            context.strokeEllipse(in: CGRect(x: currentPoint.x - walkerRadius, y: currentPoint.y - walkerRadius, width: walkerSize, height: walkerSize))
             
-            // Draw custom emoji
-            let emojiAttrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.systemFont(ofSize: ResponsiveLayout.scale(12))
-            ]
-            let emojiSize = snapshotUserEmoji.size(withAttributes: emojiAttrs)
-            let emojiX = currentPoint.x - emojiSize.width / 2
-            let emojiY = currentPoint.y - emojiSize.height / 2
-            snapshotUserEmoji.draw(at: CGPoint(x: emojiX, y: emojiY), withAttributes: emojiAttrs)
+            // Draw connector lines for region jumps (YOUR path)
+            drawRegionConnectors(
+                context: context,
+                locations: locations,
+                mainRegion: mainRegion,
+                insetSnapshots: insetSnapshots,
+                insetPositions: positions,
+                mainSnapshot: snapshotObj,
+                mapRect: mapRect,
+                scaledInsetSize: scaledInsetSize,
+                visiblePoints: visiblePoints,
+                userColor: UIColor(hex: snapshotUserColor) ?? UIColor.systemBlue
+            )
+            
+            // Draw connector lines for FRIENDS
+            for friend in friends {
+                let friendColor = UIColor(hex: friend.color) ?? UIColor.systemRed
+                let friendVisiblePoints = Int(ceil(Double(friend.coordinates.count) * progress))
+                
+                drawRegionConnectors(
+                    context: context,
+                    locations: friend.coordinates,
+                    mainRegion: mainRegion,
+                    insetSnapshots: insetSnapshots,
+                    insetPositions: positions,
+                    mainSnapshot: snapshotObj,
+                    mapRect: mapRect,
+                    scaledInsetSize: scaledInsetSize,
+                    visiblePoints: friendVisiblePoints,
+                    userColor: friendColor
+                )
+            }
         }
         
-        // Title overlay
+        // Title, progress bar, collage
         let titleAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: ResponsiveLayout.dynamicFontSize(base: 35), weight: .bold),
+            .font: UIFont.systemFont(ofSize: 35, weight: .bold),
             .foregroundColor: UIColor.white
         ]
         
         let title = friends.isEmpty ? "Your Journey" : "Your Journeys"
         let titleSize = title.size(withAttributes: titleAttrs)
-        title.draw(at: CGPoint(x: (videoSize.width - titleSize.width) / 2, y: ResponsiveLayout.scale(35)), withAttributes: titleAttrs)
+        title.draw(at: CGPoint(x: (videoSize.width - titleSize.width) / 2, y: 35), withAttributes: titleAttrs)
         
-        // Progress bar between map and collage
-        let progressBarY: CGFloat = collageStartY  // 5px above collage (785px)
+        let progressBarY: CGFloat = 785
         let progressBarHeight: CGFloat = 6
         let progressBarPadding: CGFloat = 40
         let progressBarWidth = videoSize.width - (progressBarPadding * 2)
-
-        // Progress bar background
-        let progressBgRect = CGRect(
-            x: progressBarPadding,
-            y: progressBarY,
-            width: progressBarWidth,
-            height: progressBarHeight
-        )
+        
+        let progressBgRect = CGRect(x: progressBarPadding, y: progressBarY, width: progressBarWidth, height: progressBarHeight)
         context.setFillColor(UIColor.white.withAlphaComponent(0.2).cgColor)
         context.addPath(CGPath(roundedRect: progressBgRect, cornerWidth: progressBarHeight / 2, cornerHeight: progressBarHeight / 2, transform: nil))
         context.fillPath()
         
-        // Progress bar fill
         let progressFillWidth = progressBarWidth * CGFloat(progress)
-        let progressFillRect = CGRect(
-            x: progressBarPadding,
-            y: progressBarY,
-            width: progressFillWidth,
-            height: progressBarHeight
-        )
+        let progressFillRect = CGRect(x: progressBarPadding, y: progressBarY, width: progressFillWidth, height: progressBarHeight)
         context.setFillColor(UIColor.white.withAlphaComponent(0.9).cgColor)
         context.addPath(CGPath(roundedRect: progressFillRect, cornerWidth: progressBarHeight / 2, cornerHeight: progressBarHeight / 2, transform: nil))
         context.fillPath()
         
-        // Collage background
-//        let collageStartY: CGFloat = ResponsiveLayout.collageStartY
-//        let collageHeight: CGFloat = ResponsiveLayout.collageHeight
-//        let collageWidth = ResponsiveLayout.collageWidth
-//        let collageX: CGFloat = ResponsiveLayout.collageX
-        //let collageRect = CGRect(x: collageX, y: collageStartY, width: collageWidth, height: collageHeight)
-        
-        
         drawPhotoCollage(context: context, progress: progress)
     }
-
+// MARK: - Helper Functions for generating the increasingly complex map lol
+    private enum ConnectorStyle {
+        case normal      // Main travel line between regions
+        case toInset     // Line from off-screen to inset box
+        case fromInset   // Line from inset box to off-screen
+    }
+    
     // MARK: - Photo Collage Drawing (Optimized)
-
     private func drawPhotoCollage(context: CGContext, progress: Double) {
         guard !collageLayout.isEmpty, !prerenderedPhotos.isEmpty else { return }
         
-        // Match the scaled values - use ResponsiveLayout to be consistent
-        let collageStartY: CGFloat = ResponsiveLayout.collageStartY
-        let collageHeight: CGFloat = ResponsiveLayout.collageHeight
-        let collageWidth = ResponsiveLayout.collageWidth
-        let collageX: CGFloat = ResponsiveLayout.collageX
+        // FIXED positions
+        let collageStartY: CGFloat = 800
+        let collageHeight: CGFloat = 460  // videoSize.height - collageStartY - 20
+        let collageWidth: CGFloat = 660   // videoSize.width - 60
+        let collageX: CGFloat = 30
         let collageArea = CGRect(x: collageX, y: collageStartY, width: collageWidth, height: collageHeight)
         
         context.saveGState()
@@ -1203,12 +1933,13 @@ class VideoExporter: ObservableObject {
     
     // MARK: - Map Completion Flash Effect
 
+    // UPDATE drawMapCompletion signature:
     private func drawMapCompletion(
         context: CGContext,
         frame: Int,
         totalFrames: Int,
         locations: [CLLocationCoordinate2D],
-        mapData: (image: UIImage, snapshot: MKMapSnapshotter.Snapshot)?,
+        mapData: (image: UIImage, snapshot: MKMapSnapshotter.Snapshot, regions: [MapRegion], insetSnapshots: [(region: MapRegion, snapshot: MKMapSnapshotter.Snapshot)])?,
         friends: [FriendData]
     ) {
         guard !locations.isEmpty else { return }
@@ -1226,6 +1957,9 @@ class VideoExporter: ObservableObject {
         
         guard let snapshotObj = mapData?.snapshot else { return }
         
+        // Get main region (if multi-region)
+        let mainRegion = mapData?.regions.first
+        
         func coordinateToPoint(_ coord: CLLocationCoordinate2D) -> CGPoint {
             let snapshotPoint = snapshotObj.point(for: coord)
             let snapshotSize = mapData?.image.size ?? CGSize(width: 700, height: 700)
@@ -1238,9 +1972,23 @@ class VideoExporter: ObservableObject {
             )
         }
         
-        // Draw all friend paths (complete)
+        // Filter locations by main region if multi-region
+        let userLocsToShow: [CLLocationCoordinate2D]
+        if let mainReg = mainRegion {
+            userLocsToShow = locations.filter { isCoordinate($0, inRegion: mainReg) }
+        } else {
+            userLocsToShow = locations
+        }
+        
+        // Draw all friend paths (complete) - only in main region
         for friend in friends {
-            let friendLocations = friend.coordinates
+            let friendLocations: [CLLocationCoordinate2D]
+            if let mainReg = mainRegion {
+                friendLocations = friend.coordinates.filter { isCoordinate($0, inRegion: mainReg) }
+            } else {
+                friendLocations = friend.coordinates
+            }
+            
             guard !friendLocations.isEmpty else { continue }
             
             context.saveGState()
@@ -1283,37 +2031,40 @@ class VideoExporter: ObservableObject {
             context.restoreGState()
         }
         
-        // Draw YOUR complete path
-        context.saveGState()
-        context.setStrokeColor(UIColor.systemBlue.cgColor)
-        context.setLineWidth(4)
-        context.setLineCap(.round)
-        context.setLineJoin(.round)
-        
-        let firstPoint = coordinateToPoint(locations[0])
-        context.move(to: firstPoint)
-        
-        for i in 1..<locations.count {
-            let point = coordinateToPoint(locations[i])
-            context.addLine(to: point)
-        }
-        
-        context.strokePath()
-        context.restoreGState()
-        
-        // Draw YOUR pins
-        context.saveGState()
-        for i in 0..<locations.count {
-            let point = coordinateToPoint(locations[i])
+        // Draw YOUR complete path (only in main region)
+        if !userLocsToShow.isEmpty {
+            context.saveGState()
+            let userColor = UIColor(hex: snapshotUserColor) ?? UIColor.systemBlue
+            context.setStrokeColor(userColor.cgColor)
+            context.setLineWidth(4)
+            context.setLineCap(.round)
+            context.setLineJoin(.round)
             
-            context.setFillColor(UIColor.systemRed.cgColor)
-            context.fillEllipse(in: CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10))
+            let firstPoint = coordinateToPoint(userLocsToShow[0])
+            context.move(to: firstPoint)
             
-            context.setStrokeColor(UIColor.white.cgColor)
-            context.setLineWidth(1.5)
-            context.strokeEllipse(in: CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10))
+            for i in 1..<userLocsToShow.count {
+                let point = coordinateToPoint(userLocsToShow[i])
+                context.addLine(to: point)
+            }
+            
+            context.strokePath()
+            context.restoreGState()
+            
+            // Draw YOUR pins
+            context.saveGState()
+            for i in 0..<userLocsToShow.count {
+                let point = coordinateToPoint(userLocsToShow[i])
+                
+                context.setFillColor(userColor.cgColor)
+                context.fillEllipse(in: CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10))
+                
+                context.setStrokeColor(UIColor.white.cgColor)
+                context.setLineWidth(1.5)
+                context.strokeEllipse(in: CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10))
+            }
+            context.restoreGState()
         }
-        context.restoreGState()
         
         // Title
         let titleAttrs: [NSAttributedString.Key: Any] = [
@@ -1374,35 +2125,37 @@ class VideoExporter: ObservableObject {
         }
     }
     
-    //MARK: Draw Stats
+    // MARK: - Draw Stats
     private func drawStats(
         context: CGContext,
         frame: Int,
         totalFrames: Int,
         statistics: [String: String]
     ) {
-        // Enable high-quality rendering for entire context
+        // Enable high-quality rendering
         context.setShouldAntialias(true)
         context.setShouldSmoothFonts(true)
         context.interpolationQuality = .high
         
+        // FIXED font sizes
         let titleAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: ResponsiveLayout.dynamicFontSize(base: 50), weight: .bold),
+            .font: UIFont.systemFont(ofSize: 50, weight: .bold),
             .foregroundColor: UIColor.white
         ]
         
         let title = "Your Stats"
         let titleSize = title.size(withAttributes: titleAttrs)
-        title.draw(at: CGPoint(x: (videoSize.width - titleSize.width) / 2, y: ResponsiveLayout.scale(70)), withAttributes: titleAttrs)
+        title.draw(at: CGPoint(x: (videoSize.width - titleSize.width) / 2, y: 70), withAttributes: titleAttrs)
         
         let sortedStats = Array(statistics.sorted(by: { $0.key < $1.key }))
         let progress = Double(frame) / Double(totalFrames)
         
-        let padding: CGFloat = ResponsiveLayout.scale(30)
+        // FIXED spacing
+        let padding: CGFloat = 30
         let cardWidth: CGFloat = videoSize.width - (padding * 2)
-        let startY: CGFloat = ResponsiveLayout.scale(140)
-        let verticalSpacing: CGFloat = ResponsiveLayout.scale(12)
-        let availableHeight = videoSize.height - startY - ResponsiveLayout.scale(30)
+        let startY: CGFloat = 140
+        let verticalSpacing: CGFloat = 12
+        let availableHeight = videoSize.height - startY - 30
         let totalSpacing = verticalSpacing * CGFloat(sortedStats.count - 1)
         let cardHeight: CGFloat = (availableHeight - totalSpacing) / CGFloat(sortedStats.count)
         
@@ -1411,7 +2164,7 @@ class VideoExporter: ObservableObject {
         for (index, (key, value)) in displayStats.enumerated() {
             let y = startY + (CGFloat(index) * (cardHeight + verticalSpacing))
             
-            if y + cardHeight > videoSize.height - ResponsiveLayout.scale(70) {
+            if y + cardHeight > videoSize.height - 70 {
                 continue
             }
             
@@ -1435,13 +2188,13 @@ class VideoExporter: ObservableObject {
                 
                 // Card background
                 context.setFillColor(UIColor.white.withAlphaComponent(0.15 * cardAlpha).cgColor)
-                context.addPath(CGPath(roundedRect: cardRect, cornerWidth: ResponsiveLayout.scale(12), cornerHeight: ResponsiveLayout.scale(12), transform: nil))
+                context.addPath(CGPath(roundedRect: cardRect, cornerWidth: 12, cornerHeight: 12, transform: nil))
                 context.fillPath()
                 
-                // Icon
-                let iconSize: CGFloat = ResponsiveLayout.scale(36)
+                // Icon - FIXED size
+                let iconSize: CGFloat = 36
                 if let icon = systemIconImage(named: iconForStat(key), size: iconSize) {
-                    let iconX = padding + cardWidth - iconSize - ResponsiveLayout.scale(15)
+                    let iconX = padding + cardWidth - iconSize - 15
                     let iconY = y + (cardHeight - iconSize) / 2
                     
                     context.saveGState()
@@ -1451,32 +2204,32 @@ class VideoExporter: ObservableObject {
                     context.restoreGState()
                 }
                 
-                let textPadding: CGFloat = ResponsiveLayout.scale(15)
-                let textWidth = cardWidth - (iconSize + ResponsiveLayout.scale(40))
+                let textPadding: CGFloat = 15
+                let textWidth = cardWidth - (iconSize + 40)
                 
-                // Key text
+                // Key text - FIXED font size
                 let keyAttrs: [NSAttributedString.Key: Any] = [
-                    .font: UIFont.systemFont(ofSize: ResponsiveLayout.dynamicFontSize(base: 18), weight: .semibold),
+                    .font: UIFont.systemFont(ofSize: 18, weight: .semibold),
                     .foregroundColor: UIColor.white.withAlphaComponent(0.85)
                 ]
                 
                 context.saveGState()
                 context.setAlpha(cardAlpha)
                 let keyText = key as NSString
-                let keyRect = CGRect(x: padding + textPadding, y: y + ResponsiveLayout.scale(20), width: textWidth, height: ResponsiveLayout.scale(25))
+                let keyRect = CGRect(x: padding + textPadding, y: y + 20, width: textWidth, height: 25)
                 keyText.draw(in: keyRect, withAttributes: keyAttrs)
                 context.restoreGState()
                 
-                // Value text
+                // Value text - FIXED font size
                 let valueAttrs: [NSAttributedString.Key: Any] = [
-                    .font: UIFont.systemFont(ofSize: ResponsiveLayout.dynamicFontSize(base: 28), weight: .bold),
+                    .font: UIFont.systemFont(ofSize: 28, weight: .bold),
                     .foregroundColor: UIColor.white
                 ]
                 
                 context.saveGState()
                 context.setAlpha(cardAlpha)
                 let valueText = value as NSString
-                let valueRect = CGRect(x: padding + textPadding, y: y + ResponsiveLayout.scale(50), width: textWidth, height: ResponsiveLayout.scale(40))
+                let valueRect = CGRect(x: padding + textPadding, y: y + 50, width: textWidth, height: 40)
                 valueText.draw(in: valueRect, withAttributes: valueAttrs)
                 context.restoreGState()
             }
@@ -1518,6 +2271,7 @@ class VideoExporter: ObservableObject {
         return UIImage(systemName: named, withConfiguration: config)?.withTintColor(.white, renderingMode: .alwaysOriginal)
     }
     
+    // MARK: - Draw Outro
     private func drawOutro(context: CGContext, frame: Int, totalFrames: Int) {
         // Animated fade in
         let progress = Double(frame) / Double(totalFrames)
@@ -1529,11 +2283,11 @@ class VideoExporter: ObservableObject {
             appIcon = icon
         }
         
-        // Draw app icon if available
+        // Draw app icon if available - FIXED sizes
         if let icon = appIcon {
-            let iconSize: CGFloat = ResponsiveLayout.scale(120)
+            let iconSize: CGFloat = 120
             let iconX = (videoSize.width - iconSize) / 2
-            let iconY = videoSize.height / 2 - ResponsiveLayout.scale(100)
+            let iconY = videoSize.height / 2 - 100
             let iconRect = CGRect(x: iconX, y: iconY, width: iconSize, height: iconSize)
             
             context.saveGState()
@@ -1550,42 +2304,42 @@ class VideoExporter: ObservableObject {
             context.restoreGState()
         }
         
-        // Main CTA text
+        // Main CTA text - FIXED font size
         let ctaAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: ResponsiveLayout.dynamicFontSize(base: 48), weight: .bold),
+            .font: UIFont.systemFont(ofSize: 48, weight: .bold),
             .foregroundColor: UIColor.white.withAlphaComponent(fadeIn)
         ]
         
         let cta = "Create Yours"
         let ctaSize = cta.size(withAttributes: ctaAttrs)
         cta.draw(
-            at: CGPoint(x: (videoSize.width - ctaSize.width) / 2, y: videoSize.height / 2 + ResponsiveLayout.scale(40)),
+            at: CGPoint(x: (videoSize.width - ctaSize.width) / 2, y: videoSize.height / 2 + 40),
             withAttributes: ctaAttrs
         )
         
-        // Subtitle text
+        // Subtitle text - FIXED font size
         let subtitleAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: ResponsiveLayout.dynamicFontSize(base: 24), weight: .medium),
+            .font: UIFont.systemFont(ofSize: 24, weight: .medium),
             .foregroundColor: UIColor.white.withAlphaComponent(fadeIn * 0.8)
         ]
         
         let subtitle = "Download Mapped 2025"
         let subtitleSize = subtitle.size(withAttributes: subtitleAttrs)
         subtitle.draw(
-            at: CGPoint(x: (videoSize.width - subtitleSize.width) / 2, y: videoSize.height / 2 + ResponsiveLayout.scale(100)),
+            at: CGPoint(x: (videoSize.width - subtitleSize.width) / 2, y: videoSize.height / 2 + 100),
             withAttributes: subtitleAttrs
         )
         
-        // Additional encouragement text
+        // Additional encouragement text - FIXED font size
         let encourageAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: ResponsiveLayout.dynamicFontSize(base: 18), weight: .regular),
+            .font: UIFont.systemFont(ofSize: 18, weight: .regular),
             .foregroundColor: UIColor.white.withAlphaComponent(fadeIn * 0.7)
         ]
         
         let encourage = "Map your year in photos"
         let encourageSize = encourage.size(withAttributes: encourageAttrs)
         encourage.draw(
-            at: CGPoint(x: (videoSize.width - encourageSize.width) / 2, y: videoSize.height / 2 + ResponsiveLayout.scale(140)),
+            at: CGPoint(x: (videoSize.width - encourageSize.width) / 2, y: videoSize.height / 2 + 140),
             withAttributes: encourageAttrs
         )
     }

@@ -1,5 +1,7 @@
 import SwiftUI
 import MapKit
+import CoreLocation
+import Photos
 
 struct YearStoryCarousel: View {
     @ObservedObject var photoLoader: PhotoLoader
@@ -57,7 +59,8 @@ struct YearStoryCarousel: View {
                     rotation: $constellationRotation,
                     backgroundStars: $constellationBackgroundStars,
                     stars: $constellationStars,
-                    connections: $constellationConnections
+                    connections: $constellationConnections,
+                    isGeneratingShare: $isGeneratingShare
                 )
                 .tag(3)
                 
@@ -218,7 +221,7 @@ struct YearStoryCarousel: View {
         let snapshotView = ConstellationSnapshotView(
             locations: photoLoader.locations,
             locationCount: photoLoader.locations.count,
-            scale: constellationScale,
+            scale: 1.0,
             rotation: constellationRotation,
             backgroundStars: constellationBackgroundStars,
             stars: constellationStars,
@@ -277,24 +280,27 @@ struct YearStoryCarousel: View {
 
 // MARK: - Card 1: Welcome
 
+// Around line 230, replace the WelcomeCard struct:
+
 struct WelcomeCard: View {
     @ObservedObject var photoLoader: PhotoLoader
     let accentTeal: Color
+    @Environment(\.colorScheme) var colorScheme
     
     var body: some View {
         ZStack {
-            // Full screen black background
-            Color.black.ignoresSafeArea()
+            (colorScheme == .dark ? Color.black : Color(white: 0.95))
+                .ignoresSafeArea()
             
             VStack(spacing: 0) {
                 Spacer()
                 
                 VStack(spacing: 24) {
-                    Text("2025")
+                    Text("\(photoLoader.photosYear > 0 ? String(photoLoader.photosYear) : "2025")")
                         .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 96), weight: .black))
                         .foregroundStyle(
                             LinearGradient(
-                                colors: [accentTeal, .white],
+                                colors: [accentTeal, colorScheme == .dark ? .white : .black],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             )
@@ -304,17 +310,25 @@ struct WelcomeCard: View {
                     VStack(spacing: 8) {
                         Text("Your Year")
                             .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 32), weight: .light))
-                            .foregroundColor(.white.opacity(0.9))
+                            .foregroundColor(colorScheme == .dark ? .white.opacity(0.9) : .black.opacity(0.8))
                         
                         Text("in Review")
                             .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 32), weight: .light))
-                            .foregroundColor(.white.opacity(0.9))
+                            .foregroundColor(colorScheme == .dark ? .white.opacity(0.9) : .black.opacity(0.8))
+                    }
+                    
+                    if photoLoader.photosYear > 0 && photoLoader.photosYear != Calendar.current.component(.year, from: Date()) {
+                        Text("Using \(String(photoLoader.photosYear)) photos (no \(String(Calendar.current.component(.year, from: Date()))) photos found)")
+                            .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 14), weight: .medium))
+                            .foregroundColor(.yellow.opacity(0.9))
+                            .padding(.horizontal, 40)
+                            .multilineTextAlignment(.center)
                     }
                     
                     HStack(spacing: 40) {
-                        StatPill(value: "\(photoLoader.locations.count)", label: "Places", color: accentTeal)
-                        StatPill(value: String(format: "%.0f", photoLoader.totalDistance / 1609.34), label: "Miles", color: accentTeal)
-                        StatPill(value: "\(photoLoader.totalPhotosWithLocation)", label: "Photos", color: accentTeal)
+                        StatPill(value: "\(photoLoader.locations.count)", label: "Places", color: accentTeal, colorScheme: colorScheme)
+                        StatPill(value: String(format: "%.0f", photoLoader.totalDistance / 1609.34), label: "Miles", color: accentTeal, colorScheme: colorScheme)
+                        StatPill(value: "\(photoLoader.totalPhotosWithLocation)", label: "Photos", color: accentTeal, colorScheme: colorScheme)
                     }
                     .padding(.top, 32)
                 }
@@ -324,7 +338,7 @@ struct WelcomeCard: View {
                 HStack(spacing: 8) {
                     Text("Swipe to explore")
                         .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .black.opacity(0.6))
                     
                     Image(systemName: "arrow.right")
                         .font(.system(size: 14))
@@ -340,6 +354,7 @@ struct StatPill: View {
     let value: String
     let label: String
     let color: Color
+    let colorScheme: ColorScheme
     
     var body: some View {
         VStack(spacing: 6) {
@@ -350,49 +365,60 @@ struct StatPill: View {
             if #available(iOS 16.0, *) {
                 Text(label)
                     .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 13), weight: .medium))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .black.opacity(0.6))
                     .textCase(.uppercase)
                     .kerning(1)
             } else {
                 Text(label)
                     .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 13), weight: .medium))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .black.opacity(0.6))
                     .textCase(.uppercase)
             }
         }
     }
 }
 
-// MARK: - Card 2: Top 12 Photos
+// MARK: - Card 2: Top 12 Photos (FIXED VERSION with All Photos Option)
 
 struct Top12PhotosCard: View {
     @ObservedObject var photoLoader: PhotoLoader
     let warmCoral: Color
     let softLavender: Color
     @Binding var isGeneratingShare: Bool
+    @Environment(\.colorScheme) var colorScheme
     
     @State private var selectedPhotos: [Int: UIImage] = [:]
-    @State private var photosByMonth: [String: [Int]] = [:] // Store INDICES instead of images
+    @State private var photosByMonth: [String: [(locationIndex: Int, photoIndex: Int)]] = [:]
+    @State private var allPhotoRefs: [(locationIndex: Int, photoIndex: Int)] = []
     @State private var monthKeys: [String] = []
     @State private var isLoadingPhotos = true
+    @State private var useAllPhotos = false  // Toggle for including non-GPS photos
     
     var body: some View {
         ZStack {
-            // Full screen gradient
-            LinearGradient(
-                colors: [warmCoral.opacity(0.4), softLavender.opacity(0.4)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+            if colorScheme == .dark {
+                LinearGradient(
+                    colors: [warmCoral.opacity(0.4), softLavender.opacity(0.4)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+            } else {
+                LinearGradient(
+                    colors: [warmCoral.opacity(0.2), softLavender.opacity(0.2)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+            }
             
             if isLoadingPhotos {
                 VStack {
                     ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .progressViewStyle(CircularProgressViewStyle(tint: colorScheme == .dark ? .white : .black))
                         .scaleEffect(1.5)
-                    Text("Loading photos...")
-                        .foregroundColor(.white)
+                    Text(useAllPhotos ? "Loading all photos..." : "Loading photos...")
+                        .foregroundColor(colorScheme == .dark ? .white : .black)
                         .padding(.top)
                 }
             } else {
@@ -402,17 +428,53 @@ struct Top12PhotosCard: View {
                     VStack(spacing: 10) {
                         Text("Your Year")
                             .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 50), weight: .bold))
-                            .foregroundColor(.white)
+                            .foregroundColor(colorScheme == .dark ? .white : .black)
                         
                         Text("in 12 Moments")
                             .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 28), weight: .light))
-                            .foregroundColor(.white.opacity(0.9))
+                            .foregroundColor(colorScheme == .dark ? .white.opacity(0.9) : .black.opacity(0.8))
                         
                         if !isGeneratingShare {
                             Text("Tap Pictures to Shuffle")
                                 .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 14), weight: .medium))
                                 .foregroundColor(warmCoral)
                                 .padding(.top, 4)
+                            
+                            // NEW: Always visible toggle button
+                            HStack(spacing: 8) {
+                                Button(action: {
+                                    if useAllPhotos {
+                                        // Switch to GPS photos only
+                                        useAllPhotos = false
+                                        loadPhotosGroupedByMonth()
+                                    } else {
+                                        // Switch to all photos
+                                        useAllPhotos = true
+                                        loadAllPhotosWithoutLocation()
+                                    }
+                                }) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: useAllPhotos ? "location.slash.fill" : "location.fill")
+                                            .font(.system(size: 11))
+                                        Text(useAllPhotos ? "All Photos" : "GPS Photos Only")
+                                            .font(.system(size: 11, weight: .semibold))
+                                        Image(systemName: "arrow.left.arrow.right")
+                                            .font(.system(size: 9))
+                                    }
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(useAllPhotos ? Color.purple : warmCoral)
+                                    .cornerRadius(6)
+                                }
+                                .padding(.top, 6)
+                                
+                                if photoLoader.locations.isEmpty && !useAllPhotos {
+                                    Text("(No GPS photos found)")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.yellow.opacity(0.8))
+                                }
+                            }
                         }
                     }
                     
@@ -435,13 +497,12 @@ struct Top12PhotosCard: View {
                                         .shadow(color: .black.opacity(0.3), radius: 5, x: 0, y: 2)
                                 }
                             } else {
-                                // Loading placeholder
                                 RoundedRectangle(cornerRadius: 12)
-                                    .fill(Color.white.opacity(0.1))
+                                    .fill(colorScheme == .dark ? Color.white.opacity(0.1) : Color.black.opacity(0.05))
                                     .frame(width: ResponsiveLayout.scale(110), height: ResponsiveLayout.scale(110))
                                     .overlay(
                                         ProgressView()
-                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                            .progressViewStyle(CircularProgressViewStyle(tint: colorScheme == .dark ? .white : .black))
                                     )
                             }
                         }
@@ -453,55 +514,208 @@ struct Top12PhotosCard: View {
             }
         }
         .onAppear {
-            loadPhotosGroupedByMonth()
+            // Auto-switch to all photos if no GPS photos available
+            if photoLoader.locations.isEmpty {
+                useAllPhotos = true
+                loadAllPhotosWithoutLocation()
+            } else {
+                loadPhotosGroupedByMonth()
+            }
+        }
+    }
+    
+    // Load ALL photos from library (even without GPS)
+    private func loadAllPhotosWithoutLocation() {
+        isLoadingPhotos = true
+        selectedPhotos.removeAll() // Clear existing photos
+        
+        DispatchQueue.global(qos: .userInitiated).async {
+            let fetchOptions = PHFetchOptions()
+            let calendar = Calendar.current
+            
+            // Use the same year logic as PhotoLoader
+            let currentYear = photoLoader.photosYear > 0 ? photoLoader.photosYear : calendar.component(.year, from: Date())
+            
+            var startComponents = DateComponents()
+            startComponents.year = currentYear
+            startComponents.month = 1
+            startComponents.day = 1
+            startComponents.hour = 0
+            startComponents.minute = 0
+            startComponents.second = 0
+            
+            var endComponents = DateComponents()
+            endComponents.year = currentYear
+            endComponents.month = 12
+            endComponents.day = 31
+            endComponents.hour = 23
+            endComponents.minute = 59
+            endComponents.second = 59
+            
+            guard let startDate = calendar.date(from: startComponents),
+                  let endDate = calendar.date(from: endComponents) else {
+                DispatchQueue.main.async {
+                    self.isLoadingPhotos = false
+                }
+                return
+            }
+            
+            fetchOptions.predicate = NSPredicate(
+                format: "creationDate >= %@ AND creationDate <= %@",
+                startDate as CVarArg,
+                endDate as CVarArg
+            )
+            fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
+            
+            let assets = PHAsset.fetchAssets(with: .image, options: fetchOptions)
+            
+            print("📸 Found \(assets.count) total photos from \(currentYear) (including non-GPS)")
+            
+            guard assets.count > 0 else {
+                DispatchQueue.main.async {
+                    self.isLoadingPhotos = false
+                }
+                return
+            }
+            
+            // Group by month
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "yyyy-MM"
+            
+            var assetsByMonth: [String: [PHAsset]] = [:]
+            var allAssets: [PHAsset] = []
+            
+            assets.enumerateObjects { asset, _, _ in
+                if let timestamp = asset.creationDate {
+                    let monthKey = dateFormatter.string(from: timestamp)
+                    if assetsByMonth[monthKey] == nil {
+                        assetsByMonth[monthKey] = []
+                    }
+                    assetsByMonth[monthKey]?.append(asset)
+                    allAssets.append(asset)
+                }
+            }
+            
+            let sortedMonthKeys = assetsByMonth.keys.sorted()
+            
+            // Load 12 photos
+            let dispatchGroup = DispatchGroup()
+            var loadedPhotos: [Int: UIImage] = [:]
+            let lock = NSLock()
+            let imageManager = PHImageManager.default()
+            let options = PHImageRequestOptions()
+            options.isSynchronous = false
+            options.deliveryMode = .highQualityFormat
+            options.isNetworkAccessAllowed = true
+            
+            for slot in 0..<12 {
+                dispatchGroup.enter()
+                
+                // Select asset
+                let asset: PHAsset
+                if slot < sortedMonthKeys.count {
+                    let monthKey = sortedMonthKeys[slot]
+                    asset = assetsByMonth[monthKey]?.randomElement() ?? allAssets.randomElement() ?? assets[0]
+                } else {
+                    asset = allAssets.randomElement() ?? assets[0]
+                }
+                
+                // Load image
+                imageManager.requestImage(
+                    for: asset,
+                    targetSize: CGSize(width: 800, height: 800),
+                    contentMode: .aspectFill,
+                    options: options
+                ) { image, _ in
+                    lock.lock()
+                    if let image = image {
+                        loadedPhotos[slot] = image
+                    } else {
+                        loadedPhotos[slot] = self.createPlaceholder()
+                    }
+                    lock.unlock()
+                    dispatchGroup.leave()
+                }
+            }
+            
+            dispatchGroup.notify(queue: .main) {
+                self.selectedPhotos = loadedPhotos
+                self.isLoadingPhotos = false
+                
+                print("✅ Loaded \(loadedPhotos.count)/12 photos from full library")
+            }
         }
     }
     
     private func loadPhotosGroupedByMonth() {
+        // Clear existing photos when switching modes
+        selectedPhotos.removeAll()
+        
+        // If no GPS photos, show empty state
+        guard !photoLoader.locations.isEmpty else {
+            isLoadingPhotos = false
+            return
+        }
+        
         isLoadingPhotos = true
         
         DispatchQueue.global(qos: .userInitiated).async {
             let dateFormatter = DateFormatter()
             dateFormatter.dateFormat = "yyyy-MM"
             
-            var grouped: [String: [Int]] = [:] // Store indices instead of images
+            var grouped: [String: [(locationIndex: Int, photoIndex: Int)]] = [:]
             
-            // Group photo INDICES by month
-            for (index, timestamp) in photoLoader.photoTimeStamps.enumerated() {
+            // Build a map of all photos by month
+            for (locIndex, timestamp) in photoLoader.photoTimeStamps.enumerated() {
                 let monthKey = dateFormatter.string(from: timestamp)
-                
                 if grouped[monthKey] == nil {
                     grouped[monthKey] = []
                 }
                 
-                // Store the location index
-                grouped[monthKey]?.append(index)
+                // Add ALL photos at this location
+                let photoCount = photoLoader.allPhotosAtLocation[locIndex].count
+                for photoIndex in 0..<photoCount {
+                    grouped[monthKey]?.append((locIndex, photoIndex))
+                }
             }
             
             let sortedMonthKeys = grouped.keys.sorted()
-            let allIndices = Array(0..<photoLoader.locations.count)
             
-            // Load first photo for each of the 12 slots
+            // Build a flat list of all photo references
+            var allPhotoRefs: [(locationIndex: Int, photoIndex: Int)] = []
+            for (locIndex, photosAtLoc) in photoLoader.allPhotosAtLocation.enumerated() {
+                for photoIndex in 0..<photosAtLoc.count {
+                    allPhotoRefs.append((locIndex, photoIndex))
+                }
+            }
+            
+            // Load photos in parallel with proper error handling
             let dispatchGroup = DispatchGroup()
             var loadedPhotos: [Int: UIImage] = [:]
+            let lock = NSLock()
             
             for slot in 0..<12 {
                 dispatchGroup.enter()
                 
-                let photoIndex: Int
+                // Select photo reference
+                let photoRef: (locationIndex: Int, photoIndex: Int)
                 if slot < sortedMonthKeys.count {
                     let monthKey = sortedMonthKeys[slot]
-                    photoIndex = grouped[monthKey]?.first ?? 0
+                    photoRef = grouped[monthKey]?.randomElement() ?? allPhotoRefs.randomElement() ?? (0, 0)
                 } else {
-                    // Use random photo for missing months
-                    photoIndex = allIndices.randomElement() ?? 0
+                    photoRef = allPhotoRefs.randomElement() ?? (0, 0)
                 }
                 
-                // Load the actual image from disk
-                photoLoader.loadThumbnail(at: photoIndex) { image in
+                // Load with proper fallback chain
+                self.loadPhotoWithFallback(photoRef: photoRef) { image in
+                    lock.lock()
                     if let image = image {
                         loadedPhotos[slot] = image
+                    } else {
+                        // Create placeholder as last resort
+                        loadedPhotos[slot] = self.createPlaceholder()
                     }
+                    lock.unlock()
                     dispatchGroup.leave()
                 }
             }
@@ -509,45 +723,150 @@ struct Top12PhotosCard: View {
             dispatchGroup.notify(queue: .main) {
                 self.photosByMonth = grouped
                 self.monthKeys = sortedMonthKeys
+                self.allPhotoRefs = allPhotoRefs
                 self.selectedPhotos = loadedPhotos
                 self.isLoadingPhotos = false
+                
+                let successCount = loadedPhotos.values.filter { $0.size.width > 100 }.count
+                print("📸 Loaded \(successCount)/12 photos successfully")
+            }
+        }
+    }
+    
+    // Robust photo loading with fallback chain
+    private func loadPhotoWithFallback(
+        photoRef: (locationIndex: Int, photoIndex: Int),
+        completion: @escaping (UIImage?) -> Void
+    ) {
+        print("🔍 Attempting to load photo at location \(photoRef.locationIndex), photo \(photoRef.photoIndex)")
+        
+        // Try 1: Load from allPhotosAtLocation cache
+        photoLoader.loadPhotosAtLocation(at: photoRef.locationIndex) { images in
+            if let images = images, photoRef.photoIndex < images.count {
+                let image = images[photoRef.photoIndex]
+                // Check if it's not a placeholder
+                if image.size.width > 100 {
+                    print("✅ Loaded from allPhotosAtLocation cache")
+                    completion(image)
+                    return
+                }
+            }
+            
+            print("⚠️ Failed to load from allPhotosAtLocation, trying thumbnail...")
+            
+            // Try 2: Load thumbnail (first photo at location)
+            if photoRef.locationIndex < photoLoader.thumbnails.count {
+                photoLoader.loadThumbnail(at: photoRef.locationIndex) { thumbnail in
+                    if let thumbnail = thumbnail, thumbnail.size.width > 100 {
+                        print("✅ Loaded from thumbnail cache")
+                        completion(thumbnail)
+                        return
+                    }
+                    
+                    print("⚠️ Failed to load thumbnail, trying in-memory...")
+                    
+                    // Try 3: Use in-memory thumbnail if already loaded
+                    let memoryThumbnail = photoLoader.thumbnails[photoRef.locationIndex]
+                    if memoryThumbnail.size.width > 100 {
+                        print("✅ Loaded from memory")
+                        completion(memoryThumbnail)
+                        return
+                    }
+                    
+                    print("❌ All attempts failed for location \(photoRef.locationIndex)")
+                    // All attempts failed
+                    completion(nil)
+                }
+            } else {
+                print("❌ Location index out of bounds: \(photoRef.locationIndex) >= \(photoLoader.thumbnails.count)")
+                completion(nil)
             }
         }
     }
     
     private func shufflePhoto(at slot: Int) {
-        // Get the indices pool for this slot
-        let indicesPool: [Int]
-        
-        if slot < monthKeys.count {
-            // Use photos from this month
-            let key = monthKeys[slot]
-            indicesPool = photosByMonth[key] ?? Array(0..<photoLoader.locations.count)
-        } else {
-            // For slots beyond available months, use all photos
-            indicesPool = Array(0..<photoLoader.locations.count)
-        }
-        
-        // Need at least 2 photos to shuffle
-        guard indicesPool.count > 1 else { return }
-        
-        // Find current photo's index
-        guard let currentImage = selectedPhotos[slot],
-              let currentIndex = photoLoader.thumbnails.firstIndex(where: { $0 === currentImage }) else {
+        // If using all photos mode, reload from library
+        if useAllPhotos {
+            shuffleFromAllPhotos(at: slot)
             return
         }
         
-        // Pick different index from the pool
-        var newIndex = indicesPool.randomElement()!
-        while newIndex == currentIndex && indicesPool.count > 1 {
-            newIndex = indicesPool.randomElement()!
+        let photoRefsPool: [(locationIndex: Int, photoIndex: Int)]
+        
+        if slot < monthKeys.count {
+            let key = monthKeys[slot]
+            photoRefsPool = photosByMonth[key] ?? allPhotoRefs
+        } else {
+            photoRefsPool = allPhotoRefs
         }
         
-        // Load the new image
-        photoLoader.loadThumbnail(at: newIndex) { image in
+        guard photoRefsPool.count > 1 else { return }
+        
+        // Pick a random photo reference
+        let newPhotoRef = photoRefsPool.randomElement()!
+        
+        // Load with fallback chain
+        loadPhotoWithFallback(photoRef: newPhotoRef) { image in
             if let image = image {
                 withAnimation(.spring(response: 0.3)) {
-                    selectedPhotos[slot] = image
+                    self.selectedPhotos[slot] = image
+                }
+            }
+        }
+    }
+    
+    // Shuffle from all photos in library
+    private func shuffleFromAllPhotos(at slot: Int) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let fetchOptions = PHFetchOptions()
+            let calendar = Calendar.current
+            let currentYear = photoLoader.photosYear > 0 ? photoLoader.photosYear : calendar.component(.year, from: Date())
+            
+            var startComponents = DateComponents()
+            startComponents.year = currentYear
+            startComponents.month = 1
+            startComponents.day = 1
+            
+            var endComponents = DateComponents()
+            endComponents.year = currentYear
+            endComponents.month = 12
+            endComponents.day = 31
+            
+            guard let startDate = calendar.date(from: startComponents),
+                  let endDate = calendar.date(from: endComponents) else {
+                return
+            }
+            
+            fetchOptions.predicate = NSPredicate(
+                format: "creationDate >= %@ AND creationDate <= %@",
+                startDate as CVarArg,
+                endDate as CVarArg
+            )
+            
+            let assets = PHAsset.fetchAssets(with: .image, options: fetchOptions)
+            guard assets.count > 0 else { return }
+            
+            let randomIndex = Int.random(in: 0..<assets.count)
+            let asset = assets[randomIndex]
+            
+            let imageManager = PHImageManager.default()
+            let options = PHImageRequestOptions()
+            options.isSynchronous = false
+            options.deliveryMode = .highQualityFormat
+            options.isNetworkAccessAllowed = true
+            
+            imageManager.requestImage(
+                for: asset,
+                targetSize: CGSize(width: 800, height: 800),
+                contentMode: .aspectFill,
+                options: options
+            ) { image, _ in
+                if let image = image {
+                    DispatchQueue.main.async {
+                        withAnimation(.spring(response: 0.3)) {
+                            self.selectedPhotos[slot] = image
+                        }
+                    }
                 }
             }
         }
@@ -570,35 +889,42 @@ struct StatsHighlightCard: View {
     let accentTeal: Color
     let warmCoral: Color
     let deepPurple: Color
+    @Environment(\.colorScheme) var colorScheme  // ADD THIS
     
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
+        ZStack {
+            // UPDATED: Adaptive background
+            (colorScheme == .dark ? Color.black : Color(white: 0.95))
+                .ignoresSafeArea()
             
-            VStack(spacing: 32) {
-                VStack(spacing: 8) {
-                    Text("Your Journey")
-                        .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 42), weight: .bold))
-                        .foregroundColor(.white)
+            VStack(spacing: 0) {
+                Spacer()
+                
+                VStack(spacing: 32) {
+                    VStack(spacing: 8) {
+                        Text("Your Journey")
+                            .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 42), weight: .bold))
+                            .foregroundColor(colorScheme == .dark ? .white : .black)
+                        
+                        Text("by the numbers")
+                            .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 20), weight: .light))
+                            .foregroundColor(colorScheme == .dark ? .white.opacity(0.8) : .black.opacity(0.7))
+                    }
                     
-                    Text("by the numbers")
-                        .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 20), weight: .light))
-                        .foregroundColor(.white.opacity(0.8))
+                    VStack(spacing: 24) {
+                        BigStatRow(icon: "figure.walk", label: "Total Distance", value: String(format: "%.1f miles", photoLoader.totalDistance / 1609.34), color: accentTeal, colorScheme: colorScheme)
+                        BigStatRow(icon: "mappin.circle.fill", label: "Places Visited", value: "\(photoLoader.locations.count)", color: warmCoral, colorScheme: colorScheme)
+                        BigStatRow(icon: "camera.fill", label: "Photos Captured", value: "\(photoLoader.totalPhotosWithLocation)", color: deepPurple, colorScheme: colorScheme)
+                        
+                        if let mostActive = getMostActiveMonth() {
+                            BigStatRow(icon: "calendar", label: "Most Active Month", value: mostActive, color: Color(red: 1.0, green: 0.6, blue: 0.3), colorScheme: colorScheme)
+                        }
+                    }
+                    .padding(.horizontal, 32)
                 }
                 
-                VStack(spacing: 24) {
-                    BigStatRow(icon: "figure.walk", label: "Total Distance", value: String(format: "%.1f miles", photoLoader.totalDistance / 1609.34), color: accentTeal)
-                    BigStatRow(icon: "mappin.circle.fill", label: "Places Visited", value: "\(photoLoader.locations.count)", color: warmCoral)
-                    BigStatRow(icon: "camera.fill", label: "Photos Captured", value: "\(photoLoader.totalPhotosWithLocation)", color: deepPurple)
-                    
-                    if let mostActive = getMostActiveMonth() {
-                        BigStatRow(icon: "calendar", label: "Most Active Month", value: mostActive, color: Color(red: 1.0, green: 0.6, blue: 0.3))
-                    }
-                }
-                .padding(.horizontal, 32)
+                Spacer()
             }
-            
-            Spacer()
         }
     }
     
@@ -623,6 +949,7 @@ struct BigStatRow: View {
     let label: String
     let value: String
     let color: Color
+    let colorScheme: ColorScheme
     
     var body: some View {
         HStack(spacing: 20) {
@@ -640,26 +967,26 @@ struct BigStatRow: View {
                 if #available(iOS 16.0, *) {
                     Text(label)
                         .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 14), weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .black.opacity(0.6))
                         .textCase(.uppercase)
                         .kerning(0.5)
                 } else {
                     Text(label)
                         .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 14), weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .black.opacity(0.6))
                         .textCase(.uppercase)
                 }
                 
                 Text(value)
                     .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 26), weight: .bold))
-                    .foregroundColor(.white)
+                    .foregroundColor(colorScheme == .dark ? .white : .black)
             }
             
             Spacer()
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
-        .background(Color.white.opacity(0.08))
+        .background(colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.05))
         .cornerRadius(16)
     }
 }
@@ -672,77 +999,88 @@ struct UniqueInsightsCard: View {
     let warmCoral: Color
     let deepPurple: Color
     let softLavender: Color
+    @Environment(\.colorScheme) var colorScheme  // ADD THIS
     
     var body: some View {
         GeometryReader { geometry in
-            let isSmallDevice = geometry.size.height < 750  // iPhone SE, etc.
-            let isMediumDevice = geometry.size.height < 900  // iPhone 13/14/15
+            let isSmallDevice = geometry.size.height < 750
+            let isMediumDevice = geometry.size.height < 900
             
-            VStack(spacing: 0) {
-                Spacer()
+            ZStack {
+                // UPDATED: Adaptive background
+                (colorScheme == .dark ? Color.black : Color(white: 0.95))
+                    .ignoresSafeArea()
                 
-                VStack(spacing: isSmallDevice ? 12 : isMediumDevice ? 16 : 20) {
-                    VStack(spacing: 8) {
-                        Text("Personal")
-                            .font(.system(size: isSmallDevice ? 32 : isMediumDevice ? 36 : 38, weight: .bold))
-                            .foregroundColor(.white)
+                VStack(spacing: 0) {
+                    Spacer()
+                    
+                    VStack(spacing: isSmallDevice ? 12 : isMediumDevice ? 16 : 20) {
+                        VStack(spacing: 8) {
+                            Text("Personal")
+                                .font(.system(size: isSmallDevice ? 32 : isMediumDevice ? 36 : 38, weight: .bold))
+                                .foregroundColor(colorScheme == .dark ? .white : .black)
+                            
+                            Text("Insights")
+                                .font(.system(size: isSmallDevice ? 32 : isMediumDevice ? 36 : 38, weight: .bold))
+                                .foregroundColor(colorScheme == .dark ? .white.opacity(0.6) : .black.opacity(0.5))
+                        }
                         
-                        Text("Insights")
-                            .font(.system(size: isSmallDevice ? 32 : isMediumDevice ? 36 : 38, weight: .bold))
-                            .foregroundColor(.white.opacity(0.6))
+                        VStack(spacing: isSmallDevice ? 8 : isMediumDevice ? 10 : 12) {
+                            if let homeBase = findHomeBase() {
+                                InsightCard(
+                                    emoji: "🏠",
+                                    title: "Your Home Base",
+                                    description: getHomeBaseDescription(homeBase),
+                                    gradient: [accentTeal, accentTeal.opacity(0.6)],
+                                    isSmallDevice: isSmallDevice,
+                                    isMediumDevice: isMediumDevice,
+                                    colorScheme: colorScheme
+                                )
+                            }
+                            
+                            if let photoStyle = getPhotoStyle() {
+                                InsightCard(
+                                    emoji: photoStyle.isEarlyBird ? "🌅" : "🌃",
+                                    title: photoStyle.isEarlyBird ? "Early Bird" : "Night Owl",
+                                    description: photoStyle.description,
+                                    gradient: photoStyle.isEarlyBird ?
+                                        [Color(red: 1.0, green: 0.7, blue: 0.3), Color(red: 1.0, green: 0.9, blue: 0.4)] :
+                                        [deepPurple, softLavender],
+                                    isSmallDevice: isSmallDevice,
+                                    isMediumDevice: isMediumDevice,
+                                    colorScheme: colorScheme
+                                )
+                            }
+                            
+                            if let explorationStyle = getExplorationStyle() {
+                                InsightCard(
+                                    emoji: explorationStyle.emoji,
+                                    title: explorationStyle.title,
+                                    description: explorationStyle.description,
+                                    gradient: [accentTeal.opacity(0.8), Color(red: 0.3, green: 0.9, blue: 0.6)],
+                                    isSmallDevice: isSmallDevice,
+                                    isMediumDevice: isMediumDevice,
+                                    colorScheme: colorScheme
+                                )
+                            }
+                            
+                            if let achievement = getDistanceAchievement() {
+                                InsightCard(
+                                    emoji: "🌎",
+                                    title: achievement.title,
+                                    description: achievement.description,
+                                    gradient: [warmCoral, Color(red: 1.0, green: 0.5, blue: 0.3)],
+                                    isSmallDevice: isSmallDevice,
+                                    isMediumDevice: isMediumDevice,
+                                    colorScheme: colorScheme
+                                )
+                            }
+                        }
+                        .padding(.horizontal, isSmallDevice ? 20 : 24)
                     }
                     
-                    VStack(spacing: isSmallDevice ? 8 : isMediumDevice ? 10 : 12) {
-                        if let homeBase = findHomeBase() {
-                            InsightCard(
-                                emoji: "🏠",
-                                title: "Your Home Base",
-                                description: getHomeBaseDescription(homeBase),
-                                gradient: [accentTeal, accentTeal.opacity(0.6)],
-                                isSmallDevice: isSmallDevice,
-                                isMediumDevice: isMediumDevice
-                            )
-                        }
-                        
-                        if let photoStyle = getPhotoStyle() {
-                            InsightCard(
-                                emoji: photoStyle.isEarlyBird ? "🌅" : "🌃",
-                                title: photoStyle.isEarlyBird ? "Early Bird" : "Night Owl",
-                                description: photoStyle.description,
-                                gradient: photoStyle.isEarlyBird ?
-                                    [Color(red: 1.0, green: 0.7, blue: 0.3), Color(red: 1.0, green: 0.9, blue: 0.4)] :
-                                    [deepPurple, softLavender],
-                                isSmallDevice: isSmallDevice,
-                                isMediumDevice: isMediumDevice
-                            )
-                        }
-                        
-                        if let explorationStyle = getExplorationStyle() {
-                            InsightCard(
-                                emoji: explorationStyle.emoji,
-                                title: explorationStyle.title,
-                                description: explorationStyle.description,
-                                gradient: [accentTeal.opacity(0.8), Color(red: 0.3, green: 0.9, blue: 0.6)],
-                                isSmallDevice: isSmallDevice,
-                                isMediumDevice: isMediumDevice
-                            )
-                        }
-                        
-                        if let achievement = getDistanceAchievement() {
-                            InsightCard(
-                                emoji: "🌎",
-                                title: achievement.title,
-                                description: achievement.description,
-                                gradient: [warmCoral, Color(red: 1.0, green: 0.5, blue: 0.3)],
-                                isSmallDevice: isSmallDevice,
-                                isMediumDevice: isMediumDevice
-                            )
-                        }
-                    }
-                    .padding(.horizontal, isSmallDevice ? 20 : 24)
+                    Spacer()
                 }
-                
-                Spacer()
             }
         }
     }
@@ -867,6 +1205,7 @@ struct InsightCard: View {
     let gradient: [Color]
     let isSmallDevice: Bool
     let isMediumDevice: Bool
+    let colorScheme: ColorScheme
     
     var body: some View {
         VStack(alignment: .leading, spacing: isSmallDevice ? 8 : isMediumDevice ? 10 : 12) {
@@ -875,13 +1214,13 @@ struct InsightCard: View {
             
             Text(title)
                 .font(.system(size: isSmallDevice ? 17 : isMediumDevice ? 18 : 20, weight: .bold))
-                .foregroundColor(.white)
+                .foregroundColor(colorScheme == .dark ? .white : .black)
                 .minimumScaleFactor(0.8)
                 .lineLimit(1)
             
             Text(description)
                 .font(.system(size: isSmallDevice ? 13 : isMediumDevice ? 13.5 : 14, weight: .medium))
-                .foregroundColor(.white.opacity(0.8))
+                .foregroundColor(colorScheme == .dark ? .white.opacity(0.8) : .black.opacity(0.7))
                 .lineSpacing(isSmallDevice ? 2 : 3)
                 .minimumScaleFactor(0.9)
                 .lineLimit(2)
@@ -890,7 +1229,7 @@ struct InsightCard: View {
         .padding(isSmallDevice ? 14 : isMediumDevice ? 16 : 18)
         .background(
             LinearGradient(
-                colors: gradient.map { $0.opacity(0.3) },
+                colors: gradient.map { $0.opacity(colorScheme == .dark ? 0.3 : 0.2) },
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -910,7 +1249,7 @@ struct InsightCard: View {
     }
 }
 
-// MARK: - Card 5: Constellation
+// MARK: - Card 5: Constellation (Static Display)
 
 struct ConstellationCard: View {
     @ObservedObject var photoLoader: PhotoLoader
@@ -921,17 +1260,17 @@ struct ConstellationCard: View {
     @Binding var backgroundStars: [(x: CGFloat, y: CGFloat, size: CGFloat, opacity: Double)]
     @Binding var stars: [ConstellationStar]
     @Binding var connections: [ConstellationConnection]
+    @Binding var isGeneratingShare: Bool
+    @Environment(\.colorScheme) var colorScheme
     
     @State private var revealProgress: Double = 0.0
     @State private var hasAppeared = false
-    @State private var lastScale: CGFloat = 1.0
-    @State private var lastRotation: Angle = .zero
     @State private var hasBuiltConstellation = false
-    @State private var offset: CGSize = .zero
-    @State private var lastOffset: CGSize = .zero
+    @State private var showReplayButton = false
     
     var body: some View {
         ZStack {
+            // Constellation always has black background
             Color.black.ignoresSafeArea()
             
             ForEach(Array(backgroundStars.enumerated()), id: \.offset) { index, star in
@@ -945,7 +1284,7 @@ struct ConstellationCard: View {
                 Spacer().frame(height: 100)
                 
                 VStack(spacing: 15) {
-                    Text("Your 2025")
+                    Text("Your \(photoLoader.photosYear > 0 ? String(photoLoader.photosYear) : String(Calendar.current.component(.year, from: Date())))")
                         .font(.system(size: 48, weight: .bold))
                         .foregroundColor(.white)
                     
@@ -1008,47 +1347,9 @@ struct ConstellationCard: View {
                             }
                         }
                         .frame(width: containerWidth, height: containerHeight)
-                        .onAppear {
-                            // Constellation is built by ContentView
-                            hasBuiltConstellation = true
-                        }
                     }
                     .frame(height: ResponsiveLayout.scaleHeight(450))
                     .padding(.horizontal, 30)
-                    .offset(offset)
-                    .scaleEffect(scale)
-                    .rotationEffect(rotation)
-                    .contentShape(Rectangle())
-                    .gesture(
-                        SimultaneousGesture(
-                            DragGesture()
-                                .onChanged { value in
-                                    offset = CGSize(
-                                        width: lastOffset.width + value.translation.width,
-                                        height: lastOffset.height + value.translation.height
-                                    )
-                                }
-                                .onEnded { _ in
-                                    lastOffset = offset
-                                },
-                            SimultaneousGesture(
-                                MagnificationGesture()
-                                    .onChanged { value in
-                                        scale = lastScale * value
-                                    }
-                                    .onEnded { value in
-                                        lastScale = scale
-                                    },
-                                RotationGesture()
-                                    .onChanged { value in
-                                        rotation = lastRotation + value
-                                    }
-                                    .onEnded { value in
-                                        lastRotation = rotation
-                                    }
-                            )
-                        )
-                    )
                 }
                 
                 Spacer()
@@ -1058,25 +1359,22 @@ struct ConstellationCard: View {
                     .foregroundColor(.white.opacity(0.7))
                     .padding(.bottom, 10)
                 
-                Text("Drag to move | Pinch to zoom | Rotate with two fingers")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.5))
-                    .padding(.bottom, 80)
+                if !isGeneratingShare {
+                    Text("Tap 'Constellation' in menu to explore interactively")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.5))
+                        .padding(.bottom, 80)
+                }
             }
+            
         }
         .onAppear {
             if !hasAppeared {
                 generateBackgroundStars()
+                hasBuiltConstellation = true
                 hasAppeared = true
                 
-                // Initialize lastScale and lastRotation from binding values
-                lastScale = scale
-                lastRotation = rotation
-                lastOffset = offset
-                
-                withAnimation(.easeInOut(duration: 2.5)) {
-                    revealProgress = 1.0
-                }
+                resetConstellation()
             }
         }
         .onDisappear {
@@ -1086,16 +1384,29 @@ struct ConstellationCard: View {
         }
     }
     
+    // Reset function (just replays animation)
+    private func resetConstellation() {
+        revealProgress = 0.0
+        
+        // Restart animation
+        withAnimation(.easeInOut(duration: 2.5)) {
+            revealProgress = 1.0
+        }
+        
+        
+        print("🔄 Reset constellation - stars: \(stars.count), built: \(hasBuiltConstellation)")
+    }
+    
     private func generateBackgroundStars() {
         guard backgroundStars.isEmpty else { return }
         
         let screenWidth = UIScreen.main.bounds.width
         let screenHeight = UIScreen.main.bounds.height
         
-        var stars: [(x: CGFloat, y: CGFloat, size: CGFloat, opacity: Double)] = []
+        var newStars: [(x: CGFloat, y: CGFloat, size: CGFloat, opacity: Double)] = []
         
         for _ in 0..<150 {
-            stars.append((
+            newStars.append((
                 x: CGFloat.random(in: 0...screenWidth),
                 y: CGFloat.random(in: 0...screenHeight),
                 size: CGFloat.random(in: 1...3),
@@ -1103,13 +1414,21 @@ struct ConstellationCard: View {
             ))
         }
         
-        backgroundStars = stars
+        backgroundStars = newStars
     }
     
     private func scaleStarsToContainer(stars: [ConstellationStar], containerSize: CGSize) -> [ConstellationStar] {
         guard !stars.isEmpty else { return [] }
         
-        // Find bounds
+        // Handle single star - return centered
+        if stars.count == 1 {
+            return [ConstellationStar(
+                coordinate: stars[0].coordinate,
+                intensity: stars[0].intensity,
+                screenPosition: CGPoint(x: containerSize.width / 2, y: containerSize.height / 2)
+            )]
+        }
+        
         var minX = stars[0].screenPosition.x
         var maxX = stars[0].screenPosition.x
         var minY = stars[0].screenPosition.y
@@ -1125,7 +1444,17 @@ struct ConstellationCard: View {
         let originalWidth = maxX - minX
         let originalHeight = maxY - minY
         
-        // Scale to fit with padding
+        // Prevent division by zero
+        guard originalWidth > 0 && originalHeight > 0 else {
+            return stars.map { star in
+                ConstellationStar(
+                    coordinate: star.coordinate,
+                    intensity: star.intensity,
+                    screenPosition: CGPoint(x: containerSize.width / 2, y: containerSize.height / 2)
+                )
+            }
+        }
+        
         let padding: CGFloat = 40
         let availableWidth = containerSize.width - (padding * 2)
         let availableHeight = containerSize.height - (padding * 2)
@@ -1134,7 +1463,6 @@ struct ConstellationCard: View {
         let scaleY = availableHeight / originalHeight
         let scaleFactor = min(scaleX, scaleY)
         
-        // Center in container
         let scaledWidth = originalWidth * scaleFactor
         let scaledHeight = originalHeight * scaleFactor
         let offsetX = (containerSize.width - scaledWidth) / 2
@@ -1262,233 +1590,899 @@ struct ConstellationStarView: View {
 
 // MARK: - Card 6: Map Preview
 
+// Replace the MapPreviewCard struct in YearStoryCarousel.swift with this updated version
+
 struct MapPreviewCard: View {
     @ObservedObject var photoLoader: PhotoLoader
     let accentTeal: Color
     let onNavigate: () -> Void
     @Binding var isGeneratingShare: Bool
+    @Environment(\.colorScheme) var colorScheme
     @State private var mapSnapshot: UIImage?
     
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
+        ZStack {
+            (colorScheme == .dark ? Color.black : Color(white: 0.95))
+                .ignoresSafeArea()
             
-            VStack(spacing: 32) {
-                VStack(spacing: 8) {
-                    Text("Your Path")
-                        .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 42), weight: .bold))
-                        .foregroundColor(.white)
-                    
-                    Text("across 2025")
-                        .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 20), weight: .light))
-                        .foregroundColor(.white.opacity(0.8))
-                }
+            VStack(spacing: 0) {
+                Spacer()
                 
-                if let snapshot = mapSnapshot {
-                    Button(action: onNavigate) {
-                        Image(uiImage: snapshot)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(height: ResponsiveLayout.scaleHeight(400))
-                            .frame(maxWidth: .infinity)
-                            .clipped()  // ADD: Clip overflow
-                            .cornerRadius(24)
-                            .shadow(color: accentTeal.opacity(0.3), radius: 20)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 24)
-                                    .stroke(accentTeal.opacity(0.5), lineWidth: 2)
-                            )
+                VStack(spacing: 32) {
+                    VStack(spacing: 8) {
+                        Text("Your Path")
+                            .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 42), weight: .bold))
+                            .foregroundColor(colorScheme == .dark ? .white : .black)
+                        
+                        Text("across \(photoLoader.photosYear > 0 ? String(photoLoader.photosYear) : String(Calendar.current.component(.year, from: Date())))")
+                            .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 20), weight: .light))
+                            .foregroundColor(colorScheme == .dark ? .white.opacity(0.8) : .black.opacity(0.7))
                     }
-                    .padding(.horizontal, 24)
-                } else {
-                    RoundedRectangle(cornerRadius: 24)
-                        .fill(Color.white.opacity(0.1))
-                        .frame(height: ResponsiveLayout.scaleHeight(400))
-                        .overlay(
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: accentTeal))
-                                .scaleEffect(1.5)
-                        )
+                    
+                    if let snapshot = mapSnapshot {
+                        Button(action: onNavigate) {
+                            Image(uiImage: snapshot)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(height: ResponsiveLayout.scaleHeight(400))
+                                .frame(maxWidth: .infinity)
+                                .clipped()
+                                .cornerRadius(24)
+                                .shadow(color: accentTeal.opacity(0.3), radius: 20)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 24)
+                                        .stroke(accentTeal.opacity(0.5), lineWidth: 2)
+                                )
+                        }
                         .padding(.horizontal, 24)
+                    } else {
+                        RoundedRectangle(cornerRadius: 24)
+                            .fill(colorScheme == .dark ? Color.white.opacity(0.1) : Color.black.opacity(0.05))
+                            .frame(height: ResponsiveLayout.scaleHeight(400))
+                            .overlay(
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: accentTeal))
+                                    .scaleEffect(1.5)
+                            )
+                            .padding(.horizontal, 24)
+                    }
+                    
+                    if !isGeneratingShare {
+                        Text("Tap map to explore")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundColor(accentTeal.opacity(0.9))
+                    }
                 }
+                .padding(.horizontal, 24)
                 
-                // ONLY show when NOT generating share
-                if !isGeneratingShare {
-                    Text("Tap map to explore")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(accentTeal.opacity(0.9))
-                }
+                Spacer()
             }
-            .padding(.horizontal, 24)
-            
-            Spacer()
         }
         .onAppear {
             generateMapSnapshot()
         }
     }
     
-    private func generateMapSnapshot() {
-        guard !photoLoader.locations.isEmpty else { return }
+    // MARK: - Region Detection (copied from ShareSection)
+    
+    private struct MapRegion {
+        let locations: [CLLocationCoordinate2D]
+        let name: String
+        let center: CLLocationCoordinate2D
+        let span: MKCoordinateSpan
+    }
+    
+    // MARK: - Draw Connector Lines for Carousel
+
+    private func drawRegionConnectorsForCarousel(
+        context: CGContext,
+        locations: [CLLocationCoordinate2D],
+        mainRegion: MapRegion,
+        insetSnapshots: [(region: MapRegion, snapshot: MKMapSnapshotter.Snapshot)],
+        insetPositions: [(x: CGFloat, y: CGFloat)],
+        mainSnapshot: MKMapSnapshotter.Snapshot,
+        mapSize: CGFloat,
+        insetSize: CGFloat,
+        userColor: UIColor
+    ) {
+        guard insetSnapshots.count > 1 else { return }
         
-        DispatchQueue.global(qos: .userInitiated).async {
-            let options = MKMapSnapshotter.Options()
+        let snapshotSize = mainSnapshot.image.size
+        
+        func coordinateToMainMapPoint(_ coord: CLLocationCoordinate2D) -> CGPoint {
+            let snapshotPoint = mainSnapshot.point(for: coord)
+            let scaleX = mapSize / snapshotSize.width
+            let scaleY = mapSize / snapshotSize.height
             
-            var minLat = photoLoader.locations[0].latitude
-            var maxLat = photoLoader.locations[0].latitude
-            var minLon = photoLoader.locations[0].longitude
-            var maxLon = photoLoader.locations[0].longitude
+            return CGPoint(
+                x: snapshotPoint.x * scaleX,
+                y: snapshotPoint.y * scaleY
+            )
+        }
+        
+        // Same logic as ShareSection - track region transitions
+        for i in 1..<locations.count {
+            let prevLocation = locations[i - 1]
+            let currentLocation = locations[i]
             
-            for location in photoLoader.locations {
-                minLat = min(minLat, location.latitude)
-                maxLat = max(maxLat, location.latitude)
-                minLon = min(minLon, location.longitude)
-                maxLon = max(maxLon, location.longitude)
+            let prevInMain = isCoordinate(prevLocation, inRegion: mainRegion)
+            let currInMain = isCoordinate(currentLocation, inRegion: mainRegion)
+            
+            if prevInMain && !currInMain {
+                for (insetIndex, insetData) in insetSnapshots.enumerated() {
+                    if isCoordinate(currentLocation, inRegion: insetData.region) {
+                        guard insetIndex < insetPositions.count else { break }
+                        
+                        let mainPoint = coordinateToMainMapPoint(prevLocation)
+                        let destinationOnMainMap = coordinateToMainMapPoint(currentLocation)
+                        
+                        drawConnectorLineForCarousel(
+                            context: context,
+                            from: mainPoint,
+                            to: destinationOnMainMap,
+                            color: userColor,
+                            clipRect: CGRect(x: 0, y: 0, width: mapSize, height: mapSize)
+                        )
+                        
+                        let insetPosition = insetPositions[insetIndex]
+                        let insetRect = CGRect(x: insetPosition.x, y: insetPosition.y, width: insetSize, height: insetSize)
+                        let insetSnapshot = insetData.snapshot
+                        let insetSnapPoint = insetSnapshot.point(for: currentLocation)
+                        let insetPoint = CGPoint(
+                            x: insetRect.minX + (insetSnapPoint.x / insetSnapshot.image.size.width) * insetSize,
+                            y: insetRect.minY + (insetSnapPoint.y / insetSnapshot.image.size.height) * insetSize
+                        )
+                        
+                        drawConnectorLineForCarousel(
+                            context: context,
+                            from: destinationOnMainMap,
+                            to: insetPoint,
+                            color: userColor,
+                            style: .toInset,
+                            clipRect: insetRect
+                        )
+                        break
+                    }
+                }
             }
             
-            let latPadding = (maxLat - minLat) * 0.2
-            let lonPadding = (maxLon - minLon) * 0.2
+            if !prevInMain && currInMain {
+                for (insetIndex, insetData) in insetSnapshots.enumerated() {
+                    if isCoordinate(prevLocation, inRegion: insetData.region) {
+                        guard insetIndex < insetPositions.count else { break }
+                        
+                        let insetPosition = insetPositions[insetIndex]
+                        let insetRect = CGRect(x: insetPosition.x, y: insetPosition.y, width: insetSize, height: insetSize)
+                        let insetSnapshot = insetData.snapshot
+                        let insetSnapPoint = insetSnapshot.point(for: prevLocation)
+                        let insetPoint = CGPoint(
+                            x: insetRect.minX + (insetSnapPoint.x / insetSnapshot.image.size.width) * insetSize,
+                            y: insetRect.minY + (insetSnapPoint.y / insetSnapshot.image.size.height) * insetSize
+                        )
+                        
+                        let departureOnMainMap = coordinateToMainMapPoint(prevLocation)
+                        let mainPoint = coordinateToMainMapPoint(currentLocation)
+                        
+                        drawConnectorLineForCarousel(
+                            context: context,
+                            from: insetPoint,
+                            to: departureOnMainMap,
+                            color: userColor,
+                            style: .fromInset,
+                            clipRect: insetRect
+                        )
+                        
+                        drawConnectorLineForCarousel(
+                            context: context,
+                            from: departureOnMainMap,
+                            to: mainPoint,
+                            color: userColor,
+                            clipRect: CGRect(x: 0, y: 0, width: mapSize, height: mapSize)
+                        )
+                        break
+                    }
+                }
+            }
+            
+            if !prevInMain && !currInMain {
+                var prevInsetIndex: Int?
+                var currInsetIndex: Int?
+                
+                for (insetIndex, insetData) in insetSnapshots.enumerated() {
+                    if isCoordinate(prevLocation, inRegion: insetData.region) {
+                        prevInsetIndex = insetIndex
+                    }
+                    if isCoordinate(currentLocation, inRegion: insetData.region) {
+                        currInsetIndex = insetIndex
+                    }
+                }
+                
+                if let prevIdx = prevInsetIndex, let currIdx = currInsetIndex, prevIdx != currIdx {
+                    guard prevIdx < insetPositions.count && currIdx < insetPositions.count else { continue }
+                    
+                    let prevInsetPos = insetPositions[prevIdx]
+                    let prevInsetRect = CGRect(x: prevInsetPos.x, y: prevInsetPos.y, width: insetSize, height: insetSize)
+                    let prevInsetSnapshot = insetSnapshots[prevIdx].snapshot
+                    let prevSnapPoint = prevInsetSnapshot.point(for: prevLocation)
+                    let prevPoint = CGPoint(
+                        x: prevInsetRect.minX + (prevSnapPoint.x / prevInsetSnapshot.image.size.width) * insetSize,
+                        y: prevInsetRect.minY + (prevSnapPoint.y / prevInsetSnapshot.image.size.height) * insetSize
+                    )
+                    
+                    let prevOnMainMap = coordinateToMainMapPoint(prevLocation)
+                    let currOnMainMap = coordinateToMainMapPoint(currentLocation)
+                    
+                    let currInsetPos = insetPositions[currIdx]
+                    let currInsetRect = CGRect(x: currInsetPos.x, y: currInsetPos.y, width: insetSize, height: insetSize)
+                    let currInsetSnapshot = insetSnapshots[currIdx].snapshot
+                    let currSnapPoint = currInsetSnapshot.point(for: currentLocation)
+                    let currPoint = CGPoint(
+                        x: currInsetRect.minX + (currSnapPoint.x / currInsetSnapshot.image.size.width) * insetSize,
+                        y: currInsetRect.minY + (currSnapPoint.y / currInsetSnapshot.image.size.height) * insetSize
+                    )
+                    
+                    drawConnectorLineForCarousel(
+                        context: context,
+                        from: prevPoint,
+                        to: prevOnMainMap,
+                        color: userColor,
+                        style: .fromInset,
+                        clipRect: prevInsetRect
+                    )
+                    
+                    drawConnectorLineForCarousel(
+                        context: context,
+                        from: prevOnMainMap,
+                        to: currOnMainMap,
+                        color: userColor,
+                        clipRect: CGRect(x: 0, y: 0, width: mapSize, height: mapSize)
+                    )
+                    
+                    drawConnectorLineForCarousel(
+                        context: context,
+                        from: currOnMainMap,
+                        to: currPoint,
+                        color: userColor,
+                        style: .toInset,
+                        clipRect: currInsetRect
+                    )
+                }
+            }
+        }
+    }
+
+    private enum ConnectorStyle {
+        case normal
+        case toInset
+        case fromInset
+    }
+    
+    private func drawConnectorLineForCarousel(
+        context: CGContext,
+        from: CGPoint,
+        to: CGPoint,
+        color: UIColor,
+        style: ConnectorStyle = .normal,
+        clipRect: CGRect? = nil
+    ) {
+        context.saveGState()
+        
+        if let clipRect = clipRect {
+            context.clip(to: clipRect)
+        }
+        
+        switch style {
+        case .normal:
+            context.setStrokeColor(color.withAlphaComponent(0.8).cgColor)
+            context.setLineWidth(2.5)
+            context.setLineDash(phase: 0, lengths: [6, 3])
+        case .toInset, .fromInset:
+            context.setStrokeColor(color.withAlphaComponent(0.5).cgColor)
+            context.setLineWidth(1.5)
+            context.setLineDash(phase: 0, lengths: [3, 3])
+        }
+        
+        context.setLineCap(.round)
+        context.move(to: from)
+        context.addLine(to: to)
+        context.strokePath()
+        
+        if style == .normal {
+            let circleRadius: CGFloat = 4
+            context.setLineDash(phase: 0, lengths: [])
+            context.setFillColor(color.cgColor)
+            
+            if clipRect == nil || clipRect!.contains(from) {
+                context.fillEllipse(in: CGRect(x: from.x - circleRadius, y: from.y - circleRadius, width: circleRadius * 2, height: circleRadius * 2))
+            }
+            if clipRect == nil || clipRect!.contains(to) {
+                context.fillEllipse(in: CGRect(x: to.x - circleRadius, y: to.y - circleRadius, width: circleRadius * 2, height: circleRadius * 2))
+            }
+        }
+        
+        context.restoreGState()
+    }
+    
+    private func detectRegions(from allLocations: [CLLocationCoordinate2D]) -> [MapRegion] {
+        guard !allLocations.isEmpty else { return [] }
+        
+        var clusters: [[CLLocationCoordinate2D]] = []
+        
+        for location in allLocations {
+            var addedToCluster = false
+            
+            for i in 0..<clusters.count {
+                if clusters[i].contains(where: { existingLoc in
+                    let loc1 = CLLocation(latitude: location.latitude, longitude: location.longitude)
+                    let loc2 = CLLocation(latitude: existingLoc.latitude, longitude: existingLoc.longitude)
+                    let distance = loc1.distance(from: loc2)
+                    return distance < 10_000_000 // 2000km threshold
+                }) {
+                    clusters[i].append(location)
+                    addedToCluster = true
+                    break
+                }
+            }
+            
+            if !addedToCluster {
+                clusters.append([location])
+            }
+        }
+        
+        clusters.sort { $0.count > $1.count }
+        
+        return clusters.enumerated().map { index, locations in
+            let minLat = locations.map(\.latitude).min()!
+            let maxLat = locations.map(\.latitude).max()!
+            let minLon = locations.map(\.longitude).min()!
+            let maxLon = locations.map(\.longitude).max()!
             
             let center = CLLocationCoordinate2D(
                 latitude: (minLat + maxLat) / 2,
                 longitude: (minLon + maxLon) / 2
             )
             
+            let latPadding = (maxLat - minLat) * 0.2
+            let lonPadding = (maxLon - minLon) * 0.2
+            
             let span = MKCoordinateSpan(
-                latitudeDelta: (maxLat - minLat) + latPadding,
-                longitudeDelta: (maxLon - minLon) + lonPadding
+                latitudeDelta: max((maxLat - minLat) + latPadding, 0.5),
+                longitudeDelta: max((maxLon - minLon) + lonPadding, 0.5)
             )
             
+            let regionName = index == 0 ? "Main" : "Region \(index + 1)"
+            
+            return MapRegion(locations: locations, name: regionName, center: center, span: span)
+        }
+    }
+    
+    // MARK: - Check if coordinate is in region
+    
+    private func isCoordinate(_ coord: CLLocationCoordinate2D, inRegion region: MapRegion) -> Bool {
+        let minLat = region.locations.map(\.latitude).min() ?? 0
+        let maxLat = region.locations.map(\.latitude).max() ?? 0
+        let minLon = region.locations.map(\.longitude).min() ?? 0
+        let maxLon = region.locations.map(\.longitude).max() ?? 0
+        
+        let latBuffer = (maxLat - minLat) * 0.05
+        let lonBuffer = (maxLon - minLon) * 0.05
+        
+        return coord.latitude >= (minLat - latBuffer) &&
+               coord.latitude <= (maxLat + latBuffer) &&
+               coord.longitude >= (minLon - lonBuffer) &&
+               coord.longitude <= (maxLon + lonBuffer)
+    }
+    
+    // MARK: - Generate Map Snapshot
+    
+    private func generateMapSnapshot() {
+        guard !photoLoader.locations.isEmpty else { return }
+        
+        DispatchQueue.global(qos: .userInitiated).async {
+            let allLocations = photoLoader.locations
+            let regions = self.detectRegions(from: allLocations)
+            
             let snapshotSize = ResponsiveLayout.scale(800)
-            options.region = MKCoordinateRegion(center: center, span: span)
-            options.size = CGSize(width: snapshotSize, height: snapshotSize)
-            options.scale = 2.0
             
-            let snapshotter = MKMapSnapshotter(options: options)
-            
-            snapshotter.start { snapshot, error in
-                guard let snapshot = snapshot else { return }
-                
-                // Get user's custom color
-                let userColorHex = UserDefaults.standard.string(forKey: "userColor") ?? "#33CCBB"
-                let lineColor = UIColor(hex: userColorHex) ?? UIColor(red: 0.2, green: 0.8, blue: 0.7, alpha: 1.0)
-                
-                let image = UIGraphicsImageRenderer(size: options.size).image { context in
-                    snapshot.image.draw(at: .zero)
-                    
-                    let ctx = context.cgContext
-                    
-                    // Draw line with user's custom color
-                    ctx.setStrokeColor(lineColor.cgColor)
-                    ctx.setLineWidth(ResponsiveLayout.scale(5))
-                    ctx.setLineCap(.round)
-                    ctx.setLineJoin(.round)
-                    
-                    for (index, location) in photoLoader.locations.enumerated() {
-                        let point = snapshot.point(for: location)
-                        
-                        if index == 0 {
-                            ctx.move(to: point)
-                        } else {
-                            ctx.addLine(to: point)
-                        }
-                    }
-                    
-                    ctx.strokePath()
-                    
- 
-                    for location in photoLoader.locations {
-                        let point = snapshot.point(for: location)
-                        ctx.setFillColor(lineColor.cgColor)
-                        ctx.fillEllipse(in: CGRect(x: point.x - 8, y: point.y - 8, width: 16, height: 16))
-                        ctx.setStrokeColor(UIColor.white.cgColor)
-                        ctx.setLineWidth(3)
-                        ctx.strokeEllipse(in: CGRect(x: point.x - 8, y: point.y - 8, width: 16, height: 16))
-                    }
-                }
-                
-                DispatchQueue.main.async {
-                    self.mapSnapshot = image
-                }
+            if regions.count == 1 {
+                // Single region - simple map
+                self.generateSingleRegionSnapshot(region: regions[0], size: snapshotSize)
+            } else {
+                // Multiple regions - composite map with insets
+                self.generateMultiRegionSnapshot(regions: regions, size: snapshotSize)
             }
         }
     }
-}
+    
+    private func generateSingleRegionSnapshot(region: MapRegion, size: CGFloat) {
+        let options = MKMapSnapshotter.Options()
+        options.region = MKCoordinateRegion(center: region.center, span: region.span)
+        options.size = CGSize(width: size, height: size)
+        options.scale = 2.0
+        
+        let snapshotter = MKMapSnapshotter(options: options)
+        
+        snapshotter.start { snapshot, error in
+            guard let snapshot = snapshot else { return }
+            
+            let userColorHex = UserDefaults.standard.string(forKey: "userColor") ?? "#33CCBB"
+            let lineColor = UIColor(hex: userColorHex) ?? UIColor(red: 0.2, green: 0.8, blue: 0.7, alpha: 1.0)
+            
+            let image = UIGraphicsImageRenderer(size: options.size).image { context in
+                snapshot.image.draw(at: .zero)
+                
+                let ctx = context.cgContext
+                
+                // Draw path
+                ctx.setStrokeColor(lineColor.cgColor)
+                ctx.setLineWidth(ResponsiveLayout.scale(5))
+                ctx.setLineCap(.round)
+                ctx.setLineJoin(.round)
+                
+                for (index, location) in self.photoLoader.locations.enumerated() {
+                    let point = snapshot.point(for: location)
+                    
+                    if index == 0 {
+                        ctx.move(to: point)
+                    } else {
+                        ctx.addLine(to: point)
+                    }
+                }
+                
+                ctx.strokePath()
+                
+                // Draw dots
+                for location in self.photoLoader.locations {
+                    let point = snapshot.point(for: location)
+                    ctx.setFillColor(lineColor.cgColor)
+                    ctx.fillEllipse(in: CGRect(x: point.x - 8, y: point.y - 8, width: 16, height: 16))
+                    ctx.setStrokeColor(UIColor.white.cgColor)
+                    ctx.setLineWidth(3)
+                    ctx.strokeEllipse(in: CGRect(x: point.x - 8, y: point.y - 8, width: 16, height: 16))
+                }
+            }
+            
+            DispatchQueue.main.async {
+                self.mapSnapshot = image
+            }
+        }
+    }
+    
+    private func generateMultiRegionSnapshot(regions: [MapRegion], size: CGFloat) {
+        guard !regions.isEmpty else { return }
+        
+        let mainRegion = regions[0]
+        let insetRegions = Array(regions.dropFirst())
+        
+        // Generate main map
+        let options = MKMapSnapshotter.Options()
+        options.region = MKCoordinateRegion(center: mainRegion.center, span: mainRegion.span)
+        options.size = CGSize(width: size, height: size)
+        options.scale = 2.0
+        
+        let snapshotter = MKMapSnapshotter(options: options)
+        let semaphore = DispatchSemaphore(value: 0)
+        var mainSnapshot: MKMapSnapshotter.Snapshot?
+        
+        snapshotter.start { snapshot, error in
+            defer { semaphore.signal() }
+            mainSnapshot = snapshot
+        }
+        semaphore.wait()
+        
+        guard let mainSnap = mainSnapshot else { return }
+        
+        // Generate inset maps
+        var insetSnapshots: [(region: MapRegion, snapshot: MKMapSnapshotter.Snapshot)] = []
+        
+        for insetRegion in insetRegions {
+            let insetOptions = MKMapSnapshotter.Options()
+            insetOptions.region = MKCoordinateRegion(center: insetRegion.center, span: insetRegion.span)
+            
+            let insetSize = size * 0.25
+            insetOptions.size = CGSize(width: insetSize, height: insetSize)
+            insetOptions.scale = 2.0
+            
+            let insetSnapshotter = MKMapSnapshotter(options: insetOptions)
+            let insetSemaphore = DispatchSemaphore(value: 0)
+            var insetSnap: MKMapSnapshotter.Snapshot?
+            
+            insetSnapshotter.start { snapshot, error in
+                defer { insetSemaphore.signal() }
+                insetSnap = snapshot
+            }
+            insetSemaphore.wait()
+            
+            if let snap = insetSnap {
+                insetSnapshots.append((insetRegion, snap))
+            }
+        }
+        
+        // Create composite image
+        let compositeImage = self.createCompositeMapImage(
+            mainSnapshot: mainSnap,
+            mainRegion: mainRegion,
+            insetSnapshots: insetSnapshots,
+            size: size
+        )
+        
+        DispatchQueue.main.async {
+            self.mapSnapshot = compositeImage
+        }
+    }
+    
+    private func createCompositeMapImage(
+        mainSnapshot: MKMapSnapshotter.Snapshot,
+        mainRegion: MapRegion,
+        insetSnapshots: [(region: MapRegion, snapshot: MKMapSnapshotter.Snapshot)],
+        size: CGFloat
+    ) -> UIImage {
+        let format = UIGraphicsImageRendererFormat()
+        format.opaque = true
+        format.scale = 2.0
+        
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size), format: format)
+        
+        return renderer.image { context in
+            let ctx = context.cgContext
+            
+            // Draw main map
+            mainSnapshot.image.draw(in: CGRect(x: 0, y: 0, width: size, height: size))
+            
+            // Draw path on main map
+            self.drawPathOnMainRegion(
+                context: ctx,
+                mainSnapshot: mainSnapshot,
+                mainRegion: mainRegion,
+                size: size
+            )
+            
+            // Draw insets
+            let insetSize = size * 0.25
+            let padding: CGFloat = 15
+            
+            let bestPositions = self.findBestInsetPositions(
+                mainRegion: mainRegion,
+                insetCount: insetSnapshots.count,
+                mainSnapshot: mainSnapshot,
+                size: size,
+                insetSize: insetSize,
+                padding: padding
+            )
+            
+            for (index, inset) in insetSnapshots.enumerated() {
+                let position = bestPositions[index]
+                let xPos = position.x
+                let yPos = position.y
+                
+                let insetRect = CGRect(x: xPos, y: yPos, width: insetSize, height: insetSize)
+                
+                // Shadow
+                ctx.setShadow(offset: CGSize(width: 0, height: 2), blur: 5, color: UIColor.black.withAlphaComponent(0.3).cgColor)
+                ctx.setFillColor(UIColor.white.cgColor)
+                ctx.fill(insetRect)
+                ctx.setShadow(offset: .zero, blur: 0, color: nil)
+                
+                // Draw inset map
+                inset.snapshot.image.draw(in: insetRect)
+                
+                // Draw path in inset
+                self.drawPathsInInset(
+                    context: ctx,
+                    insetRect: insetRect,
+                    insetRegion: inset.region,
+                    insetSnapshot: inset.snapshot
+                )
+                
+                // Draw path in inset (existing code)
+                self.drawPathsInInset(
+                    context: ctx,
+                    insetRect: insetRect,
+                    insetRegion: inset.region,
+                    insetSnapshot: inset.snapshot
+                )
 
+                // 🆕 ADD THIS SECTION - Draw connector lines
+                let userColorHex = UserDefaults.standard.string(forKey: "userColor") ?? "#33CCBB"
+                let lineColor = UIColor(hex: userColorHex) ?? UIColor.systemBlue
+                self.drawRegionConnectorsForCarousel(
+                    context: ctx,
+                    locations: self.photoLoader.locations,
+                    mainRegion: mainRegion,
+                    insetSnapshots: insetSnapshots,
+                    insetPositions: bestPositions,
+                    mainSnapshot: mainSnapshot,
+                    mapSize: size,
+                    insetSize: insetSize,
+                    userColor: lineColor
+                )
+                
+                // Border
+                ctx.setStrokeColor(UIColor.white.cgColor)
+                ctx.setLineWidth(3)
+                ctx.stroke(insetRect)
+                
+                // Label
+                let labelAttrs: [NSAttributedString.Key: Any] = [
+                    .font: UIFont.systemFont(ofSize: 12, weight: .bold),
+                    .foregroundColor: UIColor.white,
+                    .backgroundColor: UIColor.black.withAlphaComponent(0.7)
+                ]
+                let labelText = " \(inset.region.name) " as NSString
+                let labelSize = labelText.size(withAttributes: labelAttrs)
+                let labelRect = CGRect(x: xPos + 5, y: yPos + 5, width: labelSize.width, height: labelSize.height)
+                labelText.draw(in: labelRect, withAttributes: labelAttrs)
+            }
+        }
+    }
+    
+    private func drawPathOnMainRegion(
+        context: CGContext,
+        mainSnapshot: MKMapSnapshotter.Snapshot,
+        mainRegion: MapRegion,
+        size: CGFloat
+    ) {
+        let snapshotSize = mainSnapshot.image.size
+        let userColorHex = UserDefaults.standard.string(forKey: "userColor") ?? "#33CCBB"
+        let lineColor = UIColor(hex: userColorHex) ?? UIColor(red: 0.2, green: 0.8, blue: 0.7, alpha: 1.0)
+        
+        func coordinateToPoint(_ coord: CLLocationCoordinate2D) -> CGPoint? {
+            guard isCoordinate(coord, inRegion: mainRegion) else { return nil }
+            
+            let snapshotPoint = mainSnapshot.point(for: coord)
+            let buffer: CGFloat = snapshotSize.width * 0.5
+            
+            if snapshotPoint.x < -buffer || snapshotPoint.x > snapshotSize.width + buffer ||
+               snapshotPoint.y < -buffer || snapshotPoint.y > snapshotSize.height + buffer {
+                return nil
+            }
+            
+            let scaleX = size / snapshotSize.width
+            let scaleY = size / snapshotSize.height
+            
+            return CGPoint(x: snapshotPoint.x * scaleX, y: snapshotPoint.y * scaleY)
+        }
+        
+        // Draw path
+        context.saveGState()
+        context.setStrokeColor(lineColor.cgColor)
+        context.setLineWidth(5)
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        
+        var currentPath = [CGPoint]()
+        for location in photoLoader.locations {
+            if let point = coordinateToPoint(location) {
+                currentPath.append(point)
+            } else {
+                if currentPath.count >= 2 {
+                    context.move(to: currentPath[0])
+                    for i in 1..<currentPath.count {
+                        context.addLine(to: currentPath[i])
+                    }
+                }
+                currentPath.removeAll()
+            }
+        }
+        
+        if currentPath.count >= 2 {
+            context.move(to: currentPath[0])
+            for i in 1..<currentPath.count {
+                context.addLine(to: currentPath[i])
+            }
+        }
+        
+        context.strokePath()
+        context.restoreGState()
+        
+        // Draw dots
+        context.saveGState()
+        let dotSize: CGFloat = 12.0
+        let dotRadius = dotSize / 2
+        
+        for location in photoLoader.locations {
+            if let point = coordinateToPoint(location) {
+                context.setFillColor(lineColor.cgColor)
+                context.fillEllipse(in: CGRect(x: point.x - dotRadius, y: point.y - dotRadius, width: dotSize, height: dotSize))
+                context.setStrokeColor(UIColor.white.cgColor)
+                context.setLineWidth(2)
+                context.strokeEllipse(in: CGRect(x: point.x - dotRadius, y: point.y - dotRadius, width: dotSize, height: dotSize))
+            }
+        }
+        context.restoreGState()
+    }
+    
+    private func drawPathsInInset(
+        context: CGContext,
+        insetRect: CGRect,
+        insetRegion: MapRegion,
+        insetSnapshot: MKMapSnapshotter.Snapshot
+    ) {
+        let snapshotSize = insetSnapshot.image.size
+        let userColorHex = UserDefaults.standard.string(forKey: "userColor") ?? "#33CCBB"
+        let lineColor = UIColor(hex: userColorHex) ?? UIColor(red: 0.2, green: 0.8, blue: 0.7, alpha: 1.0)
+        
+        let userLocationsInRegion = photoLoader.locations.filter { location in
+            isCoordinate(location, inRegion: insetRegion)
+        }
+        
+        guard !userLocationsInRegion.isEmpty else { return }
+        
+        // Draw path
+        context.saveGState()
+        context.setStrokeColor(lineColor.cgColor)
+        context.setLineWidth(3)
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        
+        var firstPoint = true
+        for location in userLocationsInRegion {
+            let snapshotPoint = insetSnapshot.point(for: location)
+            let scaleX = insetRect.width / snapshotSize.width
+            let scaleY = insetRect.height / snapshotSize.height
+            
+            let point = CGPoint(
+                x: insetRect.minX + (snapshotPoint.x * scaleX),
+                y: insetRect.minY + (snapshotPoint.y * scaleY)
+            )
+            
+            if firstPoint {
+                context.move(to: point)
+                firstPoint = false
+            } else {
+                context.addLine(to: point)
+            }
+        }
+        
+        context.strokePath()
+        context.restoreGState()
+        
+        // Draw dots
+        context.saveGState()
+        let dotSize: CGFloat = 8
+        let dotRadius = dotSize / 2
+        
+        for location in userLocationsInRegion {
+            let snapshotPoint = insetSnapshot.point(for: location)
+            let scaleX = insetRect.width / snapshotSize.width
+            let scaleY = insetRect.height / snapshotSize.height
+            
+            let point = CGPoint(
+                x: insetRect.minX + (snapshotPoint.x * scaleX),
+                y: insetRect.minY + (snapshotPoint.y * scaleY)
+            )
+            
+            context.setFillColor(lineColor.cgColor)
+            context.fillEllipse(in: CGRect(x: point.x - dotRadius, y: point.y - dotRadius, width: dotSize, height: dotSize))
+            context.setStrokeColor(UIColor.white.cgColor)
+            context.setLineWidth(1.5)
+            context.strokeEllipse(in: CGRect(x: point.x - dotRadius, y: point.y - dotRadius, width: dotSize, height: dotSize))
+        }
+        context.restoreGState()
+    }
+    
+    private func findBestInsetPositions(
+        mainRegion: MapRegion,
+        insetCount: Int,
+        mainSnapshot: MKMapSnapshotter.Snapshot,
+        size: CGFloat,
+        insetSize: CGFloat,
+        padding: CGFloat
+    ) -> [(x: CGFloat, y: CGFloat)] {
+        let allPositions: [(x: CGFloat, y: CGFloat, corner: String)] = [
+            (padding, padding, "top-left"),
+            (size - insetSize - padding, padding, "top-right"),
+            (padding, size - insetSize - padding, "bottom-left"),
+            (size - insetSize - padding, size - insetSize - padding, "bottom-right")
+        ]
+        
+        var scoredPositions: [(position: (x: CGFloat, y: CGFloat), score: Int)] = []
+        
+        for position in allPositions {
+            let cornerRect = CGRect(x: position.x, y: position.y, width: insetSize, height: insetSize)
+            
+            var pointsInArea = 0
+            for location in mainRegion.locations {
+                let point = mainSnapshot.point(for: location)
+                let scaledPoint = CGPoint(
+                    x: point.x * (size / mainSnapshot.image.size.width),
+                    y: point.y * (size / mainSnapshot.image.size.height)
+                )
+                
+                if cornerRect.contains(scaledPoint) {
+                    pointsInArea += 1
+                }
+            }
+            
+            scoredPositions.append((position: (position.x, position.y), score: pointsInArea))
+        }
+        
+        scoredPositions.sort { $0.score < $1.score }
+        
+        return scoredPositions.prefix(insetCount).map { $0.position }
+    }
+}
 // MARK: - Card 7: Final CTA
 
 struct FinalCTACard: View {
     let accentTeal: Color
     let onNavigate: (String?) -> Void
+    @Environment(\.colorScheme) var colorScheme  // ADD THIS
     @State private var pulseAnimation = false
     
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
+        ZStack {
+            // UPDATED: Adaptive background
+            (colorScheme == .dark ? Color.black : Color(white: 0.95))
+                .ignoresSafeArea()
             
-            VStack(spacing: 48) {
-                ZStack {
-                    Circle()
-                        .fill(accentTeal.opacity(0.2))
-                        .frame(width: 120, height: 120)
-                        .scaleEffect(pulseAnimation ? 1.3 : 1.0)
-                        .opacity(pulseAnimation ? 0 : 1)
+            VStack(spacing: 0) {
+                Spacer()
+                
+                VStack(spacing: 48) {
+                    ZStack {
+                        Circle()
+                            .fill(accentTeal.opacity(0.2))
+                            .frame(width: 120, height: 120)
+                            .scaleEffect(pulseAnimation ? 1.3 : 1.0)
+                            .opacity(pulseAnimation ? 0 : 1)
+                        
+                        Circle()
+                            .fill(accentTeal.opacity(0.3))
+                            .frame(width: 100, height: 100)
+                        
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 48))
+                            .foregroundColor(accentTeal)
+                    }
                     
-                    Circle()
-                        .fill(accentTeal.opacity(0.3))
-                        .frame(width: 100, height: 100)
+                    VStack(spacing: 16) {
+                        Text("Ready to")
+                            .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 38), weight: .bold))
+                            .foregroundColor(colorScheme == .dark ? .white : .black)
+                        
+                        Text("Explore?")
+                            .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 38), weight: .bold))
+                            .foregroundColor(accentTeal)
+                    }
                     
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 48))
-                        .foregroundColor(accentTeal)
+                    VStack(spacing: 16) {
+                        Button(action: {
+                            onNavigate("Map")
+                        }) {
+                            FeaturePillButton(icon: "map.fill", text: "Interactive Map", color: accentTeal, colorScheme: colorScheme)
+                        }
+                        
+                        Button(action: {
+                            onNavigate("Share")
+                        }) {
+                            FeaturePillButton(icon: "video.fill", text: "Create Collage Video", color: accentTeal, colorScheme: colorScheme)
+                        }
+                        
+                        Button(action: {
+                            onNavigate("Friends")
+                        }) {
+                            FeaturePillButton(icon: "person.2.fill", text: "Share with Friends", color: accentTeal, colorScheme: colorScheme)
+                        }
+                    }
                 }
                 
-                VStack(spacing: 16) {
-                    Text("Ready to")
-                        .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 38), weight: .bold))
-                        .foregroundColor(.white)
-                    
-                    Text("Explore?")
-                        .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 38), weight: .bold))
-                        .foregroundColor(accentTeal)
-                }
+                Spacer()
                 
-                VStack(spacing: 16) {
-                    Button(action: {
-                        onNavigate("Map")
-                    }) {
-                        FeaturePillButton(icon: "map.fill", text: "Interactive Map", color: accentTeal)
-                    }
-                    
-                    Button(action: {
-                        onNavigate("Share")
-                    }) {
-                        FeaturePillButton(icon: "video.fill", text: "Create Collage Video", color: accentTeal)
-                    }
-                    
-                    Button(action: {
-                        onNavigate("Friends")
-                    }) {
-                        FeaturePillButton(icon: "person.2.fill", text: "Share with Friends", color: accentTeal)
-                    }
+                Button(action: {
+                    onNavigate(nil)
+                }) {
+                    Text("Explore Everything")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(colorScheme == .dark ? .black : .white)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(accentTeal)
+                        .cornerRadius(14)
                 }
+                .padding(.horizontal, 40)
+                .padding(.bottom, 40)
             }
-            
-            Spacer()
-            
-            Button(action: {
-                onNavigate(nil)
-            }) {
-                Text("Explore Everything")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundColor(.black)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(accentTeal)
-                    .cornerRadius(14)
-            }
-            .padding(.horizontal, 40)
-            .padding(.bottom, 40)
         }
         .onAppear {
             withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: false)) {
@@ -1502,6 +2496,7 @@ struct FeaturePillButton: View {
     let icon: String
     let text: String
     let color: Color
+    let colorScheme: ColorScheme
     
     var body: some View {
         HStack(spacing: 12) {
@@ -1512,7 +2507,7 @@ struct FeaturePillButton: View {
             
             Text(text)
                 .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 16), weight: .medium))
-                .foregroundColor(.white)
+                .foregroundColor(colorScheme == .dark ? .white : .black)
             
             Spacer()
             
@@ -1522,7 +2517,7 @@ struct FeaturePillButton: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
-        .background(Color.white.opacity(0.15))
+        .background(colorScheme == .dark ? Color.white.opacity(0.15) : Color.black.opacity(0.08))
         .cornerRadius(12)
         .padding(.horizontal, 40)
     }

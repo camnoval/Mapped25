@@ -416,19 +416,30 @@ struct MapSection: View {
         }
     }
     
+    // Replace the playAnimation method in MapSection.swift (around line 650)
+
     private func playAnimation() {
         guard !photoLoader.locations.isEmpty else { return }
         
+        // FIX: Ensure currentDate is set properly
         if currentDate == nil {
             currentDate = photoLoader.photoTimeStamps.first
+            animationIndex = 0
+            
+            // Reset friend animation indices
             for friend in photoLoader.friends {
                 photoLoader.friendAnimationIndices[friend.id] = 0
             }
         }
         
+        // FIX: Cancel any existing timer first
+        animationTimer?.invalidate()
+        animationTimer = nil
+        
         isAnimating = true
         
-        animationTimer = Timer.scheduledTimer(withTimeInterval: animationSpeed, repeats: true) { _ in
+        // FIX: Use a more reliable timer method that works on iPad simulator
+        let timer = Timer(timeInterval: animationSpeed, repeats: true) { _ in
             guard let current = currentDate else { return }
             
             guard let startDate = photoLoader.photoTimeStamps.first,
@@ -437,25 +448,41 @@ struct MapSection: View {
             let totalTimeInterval = endDate.timeIntervalSince(startDate)
             guard totalTimeInterval > 0 else { return }
             
-            let timeStep: TimeInterval = 86400
+            let timeStep: TimeInterval = 86400 // 1 day
             let newDate = current.addingTimeInterval(timeStep)
             
             if newDate <= endDate {
-                withAnimation(.easeInOut(duration: animationSpeed * 0.8)) {
-                    currentDate = newDate
-                    animationIndex = findClosestIndex(for: newDate, in: photoLoader.photoTimeStamps)
-                    
-                    for friend in photoLoader.getVisibleFriends() {
-                        let friendIndex = findClosestIndex(for: newDate, in: friend.timestamps)
-                        photoLoader.friendAnimationIndices[friend.id] = friendIndex
+                // FIX: Use DispatchQueue.main.async for smoother updates on iPad
+                DispatchQueue.main.async {
+                    withAnimation(.easeInOut(duration: self.animationSpeed * 0.8)) {
+                        self.currentDate = newDate
+                        self.animationIndex = self.findClosestIndex(for: newDate, in: self.photoLoader.photoTimeStamps)
+                        
+                        // Update friend positions
+                        for friend in self.photoLoader.getVisibleFriends() {
+                            let friendIndex = self.findClosestIndex(for: newDate, in: friend.timestamps)
+                            self.photoLoader.friendAnimationIndices[friend.id] = friendIndex
+                        }
+                        
+                        // Update slider
+                        self.sliderValue = newDate.timeIntervalSince(startDate) / totalTimeInterval
                     }
-                    
-                    sliderValue = newDate.timeIntervalSince(startDate) / totalTimeInterval
                 }
             } else {
-                pauseAnimation()
+                self.pauseAnimation()
             }
         }
+        
+        // FIX: Add to common run loop modes for better iPad simulator compatibility
+        RunLoop.main.add(timer, forMode: .common)
+        self.animationTimer = timer
+    }
+
+    // Also update pauseAnimation to be more explicit
+    private func pauseAnimation() {
+        isAnimating = false
+        animationTimer?.invalidate()
+        animationTimer = nil
     }
     
     private func findClosestIndex(for date: Date, in timestamps: [Date]) -> Int {
@@ -479,12 +506,6 @@ struct MapSection: View {
         }
         
         return lastValidIndex
-    }
-    
-    private func pauseAnimation() {
-        isAnimating = false
-        animationTimer?.invalidate()
-        animationTimer = nil
     }
     
     private func resetAnimation() {
@@ -1241,35 +1262,93 @@ struct MapView: UIViewRepresentable {
 
                     if locationIndex < photoLoader.thumbnails.count {
                         let thumbnail = photoLoader.thumbnails[locationIndex]
-                        // CHANGE: Use fixed size
-                        let drawSize = CGSize(width: 32, height: 32)  // Fixed size
-                        let frameSize = CGSize(width: 36, height: 36)  // Fixed size
-                        let renderer = UIGraphicsImageRenderer(size: frameSize)
-                        let circularImage = renderer.image { context in
-                            let offset = (frameSize.width - drawSize.width) / 2
-                            let rect = CGRect(x: offset, y: offset, width: drawSize.width, height: drawSize.height)
+                        
+                        // ✅ Check if this is a placeholder (gray square)
+                        let isPlaceholder = thumbnail.size.width <= 100
+                        
+                        if isPlaceholder {
+                            // Load real thumbnail from disk
+                            photoLoader.loadThumbnail(at: locationIndex) { loadedImage in
+                                guard let loadedImage = loadedImage else { return }
+                                
+                                // Create the circular image
+                                let drawSize = CGSize(width: 32, height: 32)
+                                let frameSize = CGSize(width: 36, height: 36)
+                                let renderer = UIGraphicsImageRenderer(size: frameSize)
+                                let circularImage = renderer.image { context in
+                                    let offset = (frameSize.width - drawSize.width) / 2
+                                    let rect = CGRect(x: offset, y: offset, width: drawSize.width, height: drawSize.height)
+                                    
+                                    context.cgContext.setFillColor(UIColor.white.cgColor)
+                                    context.cgContext.fillEllipse(in: rect)
+
+                                    let photoInset: CGFloat = 2
+                                    let photoRect = CGRect(
+                                        x: offset + photoInset,
+                                        y: offset + photoInset,
+                                        width: drawSize.width - photoInset * 2,
+                                        height: drawSize.height - photoInset * 2
+                                    )
+                                    context.cgContext.addEllipse(in: photoRect)
+                                    context.cgContext.clip()
+                                    loadedImage.draw(in: photoRect)
+                                }
+                                
+                                // Update the view on main thread
+                                DispatchQueue.main.async {
+                                    if let annotationView = mapView.view(for: photoAnnotation) {
+                                        annotationView.image = circularImage
+                                    }
+                                }
+                            }
                             
-                            context.cgContext.setFillColor(UIColor.white.cgColor)
-                            context.cgContext.fillEllipse(in: rect)
+                            // Show placeholder while loading
+                            let drawSize = CGSize(width: 32, height: 32)
+                            let frameSize = CGSize(width: 36, height: 36)
+                            let renderer = UIGraphicsImageRenderer(size: frameSize)
+                            let placeholderImage = renderer.image { context in
+                                let offset = (frameSize.width - drawSize.width) / 2
+                                let rect = CGRect(x: offset, y: offset, width: drawSize.width, height: drawSize.height)
+                                
+                                context.cgContext.setFillColor(UIColor.lightGray.cgColor)
+                                context.cgContext.fillEllipse(in: rect)
+                                context.cgContext.setStrokeColor(UIColor.white.cgColor)
+                                context.cgContext.setLineWidth(2)
+                                context.cgContext.strokeEllipse(in: rect)
+                            }
+                            view?.image = placeholderImage
+                            view?.frame.size = frameSize
+                        } else {
+                            // Already loaded, use it directly
+                            let drawSize = CGSize(width: 32, height: 32)
+                            let frameSize = CGSize(width: 36, height: 36)
+                            let renderer = UIGraphicsImageRenderer(size: frameSize)
+                            let circularImage = renderer.image { context in
+                                let offset = (frameSize.width - drawSize.width) / 2
+                                let rect = CGRect(x: offset, y: offset, width: drawSize.width, height: drawSize.height)
+                                
+                                context.cgContext.setFillColor(UIColor.white.cgColor)
+                                context.cgContext.fillEllipse(in: rect)
 
-                            let photoInset: CGFloat = 2
-                            let photoRect = CGRect(
-                                x: offset + photoInset,
-                                y: offset + photoInset,
-                                width: drawSize.width - photoInset * 2,
-                                height: drawSize.height - photoInset * 2
-                            )
-                            context.cgContext.addEllipse(in: photoRect)
-                            context.cgContext.clip()
-                            thumbnail.draw(in: photoRect)
+                                let photoInset: CGFloat = 2
+                                let photoRect = CGRect(
+                                    x: offset + photoInset,
+                                    y: offset + photoInset,
+                                    width: drawSize.width - photoInset * 2,
+                                    height: drawSize.height - photoInset * 2
+                                )
+                                context.cgContext.addEllipse(in: photoRect)
+                                context.cgContext.clip()
+                                thumbnail.draw(in: photoRect)
+                            }
+
+                            view?.image = circularImage
+                            view?.frame.size = frameSize
                         }
-
-                        view?.image = circularImage
-                        view?.frame.size = frameSize
                     } else {
                         // Placeholder - CHANGE: Use fixed size
-                        let drawSize = CGSize(width: 32, height: 32)  // Fixed size
-                        let frameSize = CGSize(width: 36, height: 36)  // Fixed size
+                        let drawSize = CGSize(width: 32, height: 32)
+                        let frameSize = CGSize(width: 36, height: 36)
                         let renderer = UIGraphicsImageRenderer(size: frameSize)
                         let placeholderImage = renderer.image { context in
                             let offset = (frameSize.width - drawSize.width) / 2

@@ -648,50 +648,113 @@ class PersistenceManager {
         print("📦 Prepared batch caching directories")
     }
 
-    func saveThumbnailBatch(_ batch: [(index: Int, image: UIImage)]) {
+    func saveThumbnailBatch(_ batch: [(index: Int, image: UIImage)], completion: @escaping () -> Void) {
         let cacheDir = getCacheDirectory()
         let thumbnailsDir = cacheDir.appendingPathComponent("thumbnails", isDirectory: true)
         
+        let dispatchGroup = DispatchGroup()
+        
         for item in batch {
-            autoreleasepool {
-                if let data = item.image.jpegData(compressionQuality: 0.7) {
-                    let fileURL = thumbnailsDir.appendingPathComponent("\(item.index).jpg")
-                    try? data.write(to: fileURL)
+            dispatchGroup.enter()
+            DispatchQueue.global(qos: .utility).async {
+                autoreleasepool {
+                    if let data = item.image.jpegData(compressionQuality: 0.7) {
+                        let fileURL = thumbnailsDir.appendingPathComponent("\(item.index).jpg")
+                        try? data.write(to: fileURL)
+                    }
                 }
+                dispatchGroup.leave()
             }
         }
         
-        print("💾 Saved batch of \(batch.count) thumbnails to disk")
+        dispatchGroup.notify(queue: .global(qos: .userInitiated)) {
+            print("💾 Saved batch of \(batch.count) thumbnails to disk")
+            completion()
+        }
     }
 
-    func saveLocationPhotosBatch(locationIndex: Int, photos: [(photoIndex: Int, image: UIImage)]) {
+    func saveLocationPhotosBatch(locationIndex: Int, photos: [(photoIndex: Int, image: UIImage)], completion: @escaping () -> Void) {
         let cacheDir = getCacheDirectory()
         let photosDir = cacheDir.appendingPathComponent("allPhotos", isDirectory: true)
         let locationDir = photosDir.appendingPathComponent("\(locationIndex)", isDirectory: true)
         
         try? FileManager.default.createDirectory(at: locationDir, withIntermediateDirectories: true)
         
+        let dispatchGroup = DispatchGroup()
+        
         for item in photos {
-            autoreleasepool {
-                if let data = item.image.jpegData(compressionQuality: 0.7) {
-                    let fileURL = locationDir.appendingPathComponent("\(item.photoIndex).jpg")
-                    try? data.write(to: fileURL)
+            dispatchGroup.enter()
+            DispatchQueue.global(qos: .utility).async {
+                autoreleasepool {
+                    if let data = item.image.jpegData(compressionQuality: 0.7) {
+                        let fileURL = locationDir.appendingPathComponent("\(item.photoIndex).jpg")
+                        try? data.write(to: fileURL)
+                    }
                 }
+                dispatchGroup.leave()
             }
         }
         
-        print("💾 Saved location \(locationIndex) with \(photos.count) photos to disk")
+        dispatchGroup.notify(queue: .global(qos: .userInitiated)) {
+            print("💾 Saved location \(locationIndex) with \(photos.count) photos to disk")
+            completion()
+        }
     }
 
     // Update metadata after all batches complete
     func finalizeBatchCaching(thumbnailCount: Int, locationStructure: [Int]) {
+        // Validate the structure before saving
+        let totalPhotosExpected = locationStructure.reduce(0, +)
+        print("📊 Finalizing cache:")
+        print("  - Thumbnails: \(thumbnailCount)")
+        print("  - Locations: \(locationStructure.count)")
+        print("  - Total photos expected: \(totalPhotosExpected)")
+        
+        // Verify files actually exist
+        let cacheDir = getCacheDirectory()
+        let thumbnailsDir = cacheDir.appendingPathComponent("thumbnails", isDirectory: true)
+        let photosDir = cacheDir.appendingPathComponent("allPhotos", isDirectory: true)
+        
+        var actualThumbnailCount = 0
+        var actualPhotoCount = 0
+        
+        // Count actual thumbnail files
+        for i in 0..<thumbnailCount {
+            let fileURL = thumbnailsDir.appendingPathComponent("\(i).jpg")
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                actualThumbnailCount += 1
+            }
+        }
+        
+        // Count actual photo files
+        for (locIndex, photoCount) in locationStructure.enumerated() {
+            let locationDir = photosDir.appendingPathComponent("\(locIndex)", isDirectory: true)
+            for photoIndex in 0..<photoCount {
+                let fileURL = locationDir.appendingPathComponent("\(photoIndex).jpg")
+                if FileManager.default.fileExists(atPath: fileURL.path) {
+                    actualPhotoCount += 1
+                }
+            }
+        }
+        
+        print("  - Actual thumbnails on disk: \(actualThumbnailCount)")
+        print("  - Actual photos on disk: \(actualPhotoCount)")
+        
+        if actualThumbnailCount != thumbnailCount {
+            print("⚠️ WARNING: Thumbnail count mismatch! Expected \(thumbnailCount), found \(actualThumbnailCount)")
+        }
+        
+        if actualPhotoCount != totalPhotosExpected {
+            print("⚠️ WARNING: Photo count mismatch! Expected \(totalPhotosExpected), found \(actualPhotoCount)")
+        }
+        
         UserDefaults.standard.set(thumbnailCount, forKey: thumbnailsCacheKey)
         
         if let data = try? JSONEncoder().encode(locationStructure) {
             UserDefaults.standard.set(data, forKey: allPhotosAtLocationKey)
         }
         
-        print("✅ Finalized batch caching: \(thumbnailCount) thumbnails, \(locationStructure.count) locations")
+        print("✅ Finalized batch caching")
     }
     
     // MARK: - On-Demand Image Loading
@@ -702,19 +765,33 @@ class PersistenceManager {
         let thumbnailsDir = cacheDir.appendingPathComponent("thumbnails", isDirectory: true)
         let fileURL = thumbnailsDir.appendingPathComponent("\(index).jpg")
         
-        guard let data = try? Data(contentsOf: fileURL),
-              let image = UIImage(data: data) else {
+        // Check if file exists
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            print("❌ Thumbnail file doesn't exist at index \(index): \(fileURL.path)")
             return nil
         }
         
+        guard let data = try? Data(contentsOf: fileURL) else {
+            print("❌ Failed to read thumbnail data at index \(index)")
+            return nil
+        }
+        
+        guard let image = UIImage(data: data) else {
+            print("❌ Failed to decode thumbnail image at index \(index)")
+            return nil
+        }
+        
+        print("✅ Successfully loaded thumbnail at index \(index)")
         return image
     }
 
+    /// Load all photos at a specific location from disk
     /// Load all photos at a specific location from disk
     func loadPhotosAtLocation(at locationIndex: Int) -> [UIImage]? {
         guard let structureData = UserDefaults.standard.data(forKey: allPhotosAtLocationKey),
               let structure = try? JSONDecoder().decode([Int].self, from: structureData),
               locationIndex < structure.count else {
+            print("❌ No structure data or invalid locationIndex: \(locationIndex)")
             return nil
         }
         
@@ -723,18 +800,96 @@ class PersistenceManager {
         let photosDir = cacheDir.appendingPathComponent("allPhotos", isDirectory: true)
         let locationDir = photosDir.appendingPathComponent("\(locationIndex)", isDirectory: true)
         
+        // Check if directory exists
+        guard FileManager.default.fileExists(atPath: locationDir.path) else {
+            print("❌ Location directory doesn't exist: \(locationDir.path)")
+            return nil
+        }
+        
         var images: [UIImage] = []
         
         for photoIndex in 0..<photoCount {
             let fileURL = locationDir.appendingPathComponent("\(photoIndex).jpg")
-            if let data = try? Data(contentsOf: fileURL),
-               let image = UIImage(data: data) {
-                images.append(image)
-            } else {
-                return nil // If any image fails, return nil
+            
+            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                print("❌ Photo file doesn't exist at location \(locationIndex), photo \(photoIndex)")
+                return nil
+            }
+            
+            guard let data = try? Data(contentsOf: fileURL) else {
+                print("❌ Failed to read photo data at location \(locationIndex), photo \(photoIndex)")
+                return nil
+            }
+            
+            guard let image = UIImage(data: data) else {
+                print("❌ Failed to decode image at location \(locationIndex), photo \(photoIndex)")
+                return nil
+            }
+            
+            images.append(image)
+        }
+        
+        print("✅ Successfully loaded \(images.count) photos at location \(locationIndex)")
+        return images
+    }
+    
+    // MARK: - Diagnostics
+
+    func validateCache() -> (isValid: Bool, issues: [String]) {
+        var issues: [String] = []
+        
+        // Check thumbnail cache
+        guard let thumbnailCount = UserDefaults.standard.value(forKey: thumbnailsCacheKey) as? Int else {
+            issues.append("No thumbnail count in UserDefaults")
+            return (false, issues)
+        }
+        
+        let cacheDir = getCacheDirectory()
+        let thumbnailsDir = cacheDir.appendingPathComponent("thumbnails", isDirectory: true)
+        
+        // Check if directory exists
+        guard FileManager.default.fileExists(atPath: thumbnailsDir.path) else {
+            issues.append("Thumbnails directory doesn't exist")
+            return (false, issues)
+        }
+        
+        // Check each thumbnail file
+        for i in 0..<thumbnailCount {
+            let fileURL = thumbnailsDir.appendingPathComponent("\(i).jpg")
+            if !FileManager.default.fileExists(atPath: fileURL.path) {
+                issues.append("Missing thumbnail \(i)")
             }
         }
         
-        return images
+        // Check photos structure
+        guard let structureData = UserDefaults.standard.data(forKey: allPhotosAtLocationKey),
+              let structure = try? JSONDecoder().decode([Int].self, from: structureData) else {
+            issues.append("No photo structure in UserDefaults")
+            return (false, issues)
+        }
+        
+        let photosDir = cacheDir.appendingPathComponent("allPhotos", isDirectory: true)
+        
+        // Check each location
+        for (locIndex, photoCount) in structure.enumerated() {
+            let locationDir = photosDir.appendingPathComponent("\(locIndex)", isDirectory: true)
+            
+            if !FileManager.default.fileExists(atPath: locationDir.path) {
+                issues.append("Missing location directory \(locIndex)")
+                continue
+            }
+            
+            for photoIndex in 0..<photoCount {
+                let fileURL = locationDir.appendingPathComponent("\(photoIndex).jpg")
+                if !FileManager.default.fileExists(atPath: fileURL.path) {
+                    issues.append("Missing photo at location \(locIndex), photo \(photoIndex)")
+                }
+            }
+        }
+        
+        let isValid = issues.isEmpty
+        print(isValid ? "✅ Cache validation passed" : "❌ Cache validation failed with \(issues.count) issues")
+        
+        return (isValid, issues)
     }
 }
