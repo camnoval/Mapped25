@@ -24,6 +24,9 @@ class VideoExporter: ObservableObject {
     private let videoSize = CGSize(width: 720, height: 1280)  // Fixed 9:16 at 720p
     private let fps: Int32 = 20
     
+    // FIXED photo sizes for video (NOT device-dependent)
+    private let fixedPhotoSizes: [CGFloat] = [55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 110]
+    
     // Fixed layout positions for consistent video
     private let collageStartY: CGFloat = 800
     private let mapHeight: CGFloat = 670
@@ -409,19 +412,19 @@ class VideoExporter: ObservableObject {
     private func generateCollageLayout(timestamps: [Date], locations: [CLLocationCoordinate2D]) {
         guard !photoItems.isEmpty, !timestamps.isEmpty else { return }
         
-        // Fixed positions for consistent 720x1280 video on all devices
-        let collageHeight: CGFloat = videoSize.height - collageStartY - 20  // ~460px height
-        let collageWidth: CGFloat = videoSize.width - 60  // 660px width
-        let collageX: CGFloat = 30  // 30px from left edge
+        // FIXED positions for consistent 720x1280 video on all devices
+        let collageHeight: CGFloat = 460  // Fixed: videoSize.height - collageStartY - 20
+        let collageWidth: CGFloat = 660   // Fixed: videoSize.width - 60
+        let collageX: CGFloat = 30        // Fixed: 30px from left edge
         
-        //   SCALED photo sizes for 720p
-        let photoSizes = ResponsiveLayout.photoSizes
+        // FIXED photo sizes for 720p (NOT scaled)
+        let photoSizes = fixedPhotoSizes
         
         var layout: [(image: UIImage, rect: CGRect, rotation: CGFloat, hasBorder: Bool, appearTime: Double, size: CGFloat, shape: PhotoShape)] = []
         
         let appearTimes = photoItems.map { findAppearTime(for: $0.date, in: timestamps) }
         
-        let bleedAmount = ResponsiveLayout.scale(70)
+        let bleedAmount: CGFloat = 70  // Fixed value
         let extendedHeight = collageHeight + (bleedAmount * 2)
         let extendedWidth = collageWidth + (bleedAmount * 2)
         
@@ -829,36 +832,40 @@ class VideoExporter: ObservableObject {
             )
         }
     }
+    
+    // MARK: - Draw Intro
     private func drawIntro(context: CGContext, frame: Int, totalFrames: Int) {
         let progress = easeInOut(Double(frame) / Double(totalFrames))
         let alpha = min(1.0, progress * 1.5)
         
+        // FIXED font sizes (NOT responsive)
         let yearAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: ResponsiveLayout.dynamicFontSize(base: 80), weight: .black),
+            .font: UIFont.systemFont(ofSize: 80, weight: .black),
             .foregroundColor: UIColor.white.withAlphaComponent(alpha)
         ]
         
         let year = "2025"
         let yearSize = year.size(withAttributes: yearAttrs)
-        let yearY = videoSize.height / 2 - yearSize.height - ResponsiveLayout.scale(20)
+        let yearY = videoSize.height / 2 - yearSize.height - 20
         year.draw(
             at: CGPoint(x: (videoSize.width - yearSize.width) / 2, y: yearY),
             withAttributes: yearAttrs
         )
         
         let mappedAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: ResponsiveLayout.dynamicFontSize(base: 55), weight: .medium),
+            .font: UIFont.systemFont(ofSize: 55, weight: .medium),
             .foregroundColor: UIColor.white.withAlphaComponent(alpha * 0.9)
         ]
         
         let mapped = "Mapped"
         let mappedSize = mapped.size(withAttributes: mappedAttrs)
         mapped.draw(
-            at: CGPoint(x: (videoSize.width - mappedSize.width) / 2, y: yearY + yearSize.height + ResponsiveLayout.scale(10)),
+            at: CGPoint(x: (videoSize.width - mappedSize.width) / 2, y: yearY + yearSize.height + 10),
             withAttributes: mappedAttrs
         )
     }
     
+    // MARK: - Draw Map Animation
     private func drawMapAnimation(
         context: CGContext,
         frame: Int,
@@ -871,12 +878,12 @@ class VideoExporter: ObservableObject {
         
         let progress = Double(frame) / Double(totalFrames)
         
-        // Map area
+        // FIXED map area (NOT responsive)
         let mapRect = CGRect(
-            x: ResponsiveLayout.scaleWidth(30),
-            y: ResponsiveLayout.scaleHeight(100),
-            width: videoSize.width - ResponsiveLayout.scaleWidth(60),
-            height: ResponsiveLayout.scaleHeight(670)
+            x: 30,
+            y: 100,
+            width: 660,  // videoSize.width - 60
+            height: 670
         )
         
         if let snapshot = mapData?.image {
@@ -905,12 +912,16 @@ class VideoExporter: ObservableObject {
             )
         }
         
+        // Calculate visible points based on progress
+        // FIXED: Use ceiling instead of max to ensure we always show at least the progress we're at
+        let visiblePoints = Int(ceil(Double(locations.count) * progress))
+        
         // Draw friend paths FIRST (underneath your path)
         for friend in friends {
             let friendLocations = friend.coordinates
             guard !friendLocations.isEmpty else { continue }
             
-            let friendVisiblePoints = max(2, Int(Double(friendLocations.count) * progress))
+            let friendVisiblePoints = Int(ceil(Double(friendLocations.count) * progress))
             
             context.saveGState()
             if let friendColor = UIColor(hex: friend.color) {
@@ -918,25 +929,32 @@ class VideoExporter: ObservableObject {
             } else {
                 context.setStrokeColor(UIColor.systemRed.cgColor)
             }
-            context.setLineWidth(ResponsiveLayout.scale(3))
+            context.setLineWidth(3)
             context.setLineCap(.round)
             context.setLineJoin(.round)
             
-            let friendFirstPoint = coordinateToPoint(friendLocations[0])
-            context.move(to: friendFirstPoint)
-            
-            for i in 1..<min(friendVisiblePoints, friendLocations.count) {
-                let point = coordinateToPoint(friendLocations[i])
-                context.addLine(to: point)
+            // Draw friend path - FIXED to include all visible points
+            if friendVisiblePoints > 0 && friendLocations.count > 0 {
+                let friendFirstPoint = coordinateToPoint(friendLocations[0])
+                context.move(to: friendFirstPoint)
+                
+                // Draw up to and including the current visible point
+                let maxIndex = min(friendVisiblePoints - 1, friendLocations.count - 1)
+                if maxIndex >= 1 {
+                    for i in 1...maxIndex {
+                        let point = coordinateToPoint(friendLocations[i])
+                        context.addLine(to: point)
+                    }
+                }
+                
+                context.strokePath()
             }
-            
-            context.strokePath()
             context.restoreGState()
             
-            // Draw friend pins
+            // Draw friend pins - SAME COLOR AS PATH
             context.saveGState()
-            let friendDotSize: CGFloat = ResponsiveLayout.scale(8)
-            let friendDotRadius = friendDotSize / 2
+            let dotSize: CGFloat = 8  // FIXED
+            let dotRadius = dotSize / 2
             for i in 0..<min(friendVisiblePoints, friendLocations.count) {
                 let point = coordinateToPoint(friendLocations[i])
                 
@@ -945,19 +963,19 @@ class VideoExporter: ObservableObject {
                 } else {
                     context.setFillColor(UIColor.systemRed.cgColor)
                 }
-                context.fillEllipse(in: CGRect(x: point.x - friendDotRadius, y: point.y - friendDotRadius, width: friendDotSize, height: friendDotSize))
-                
+                context.fillEllipse(in: CGRect(x: point.x - dotRadius, y: point.y - dotRadius, width: dotSize, height: dotSize))
                 context.setStrokeColor(UIColor.white.cgColor)
-                context.setLineWidth(ResponsiveLayout.scale(1))
-                context.strokeEllipse(in: CGRect(x: point.x - friendDotRadius, y: point.y - friendDotRadius, width: friendDotSize, height: friendDotSize))
+                context.setLineWidth(1)
+                context.strokeEllipse(in: CGRect(x: point.x - dotRadius, y: point.y - dotRadius, width: dotSize, height: dotSize))
             }
             context.restoreGState()
             
             // Draw friend current walker
-            if friendVisiblePoints < friendLocations.count {
-                let currentPoint = coordinateToPoint(friendLocations[friendVisiblePoints])
+            if friendVisiblePoints > 0 && friendVisiblePoints <= friendLocations.count {
+                let currentIndex = min(friendVisiblePoints - 1, friendLocations.count - 1)
+                let currentPoint = coordinateToPoint(friendLocations[currentIndex])
                 
-                let friendWalkerSize: CGFloat = ResponsiveLayout.scale(16)
+                let friendWalkerSize: CGFloat = 16  // FIXED
                 let friendWalkerRadius = friendWalkerSize / 2
                 
                 if let friendColor = UIColor(hex: friend.color) {
@@ -967,38 +985,43 @@ class VideoExporter: ObservableObject {
                 }
                 context.fillEllipse(in: CGRect(x: currentPoint.x - friendWalkerRadius, y: currentPoint.y - friendWalkerRadius, width: friendWalkerSize, height: friendWalkerSize))
                 context.setStrokeColor(UIColor.white.cgColor)
-                context.setLineWidth(ResponsiveLayout.scale(2))
+                context.setLineWidth(2)  // FIXED
                 context.strokeEllipse(in: CGRect(x: currentPoint.x - friendWalkerRadius, y: currentPoint.y - friendWalkerRadius, width: friendWalkerSize, height: friendWalkerSize))
             }
         }
         
-        // Draw YOUR path - USE SNAPSHOT COLOR
-        let visiblePoints = max(2, Int(Double(locations.count) * progress))
-        
+        // Draw YOUR path - USE SNAPSHOT COLOR - FIXED VERSION
         context.saveGState()
         if let userUIColor = UIColor(hex: snapshotUserColor) {
             context.setStrokeColor(userUIColor.cgColor)
         } else {
             context.setStrokeColor(UIColor.systemBlue.cgColor)
         }
-        context.setLineWidth(ResponsiveLayout.scale(4))
+        context.setLineWidth(4)
         context.setLineCap(.round)
         context.setLineJoin(.round)
         
-        let firstPoint = coordinateToPoint(locations[0])
-        context.move(to: firstPoint)
-        
-        for i in 1..<min(visiblePoints, locations.count) {
-            let point = coordinateToPoint(locations[i])
-            context.addLine(to: point)
+        // FIXED: Draw path including the final visible point
+        if visiblePoints > 0 && locations.count > 0 {
+            let firstPoint = coordinateToPoint(locations[0])
+            context.move(to: firstPoint)
+            
+            // Draw up to and including the current visible point
+            let maxIndex = min(visiblePoints - 1, locations.count - 1)
+            if maxIndex >= 1 {
+                for i in 1...maxIndex {
+                    let point = coordinateToPoint(locations[i])
+                    context.addLine(to: point)
+                }
+            }
+            
+            context.strokePath()
         }
-        
-        context.strokePath()
         context.restoreGState()
         
         // Draw YOUR pins - USE SNAPSHOT COLOR
         context.saveGState()
-        let dotSize: CGFloat = ResponsiveLayout.scale(10)
+        let dotSize: CGFloat = 10  // FIXED
         let dotRadius = dotSize / 2
         for i in 0..<min(visiblePoints, locations.count) {
             let point = coordinateToPoint(locations[i])
@@ -1011,16 +1034,17 @@ class VideoExporter: ObservableObject {
             context.fillEllipse(in: CGRect(x: point.x - dotRadius, y: point.y - dotRadius, width: dotSize, height: dotSize))
             
             context.setStrokeColor(UIColor.white.cgColor)
-            context.setLineWidth(ResponsiveLayout.scale(1.5))
+            context.setLineWidth(1.5)  // FIXED
             context.strokeEllipse(in: CGRect(x: point.x - dotRadius, y: point.y - dotRadius, width: dotSize, height: dotSize))
         }
         context.restoreGState()
         
         // Draw YOUR current walker - USE SNAPSHOT EMOJI AND COLOR
-        if visiblePoints < locations.count {
-            let currentPoint = coordinateToPoint(locations[visiblePoints])
+        if visiblePoints > 0 && visiblePoints <= locations.count {
+            let currentIndex = min(visiblePoints - 1, locations.count - 1)
+            let currentPoint = coordinateToPoint(locations[currentIndex])
             
-            let walkerSize: CGFloat = ResponsiveLayout.scale(20)
+            let walkerSize: CGFloat = 20  // FIXED
             let walkerRadius = walkerSize / 2
             
             // Background circle with custom color
@@ -1031,12 +1055,12 @@ class VideoExporter: ObservableObject {
             }
             context.fillEllipse(in: CGRect(x: currentPoint.x - walkerRadius, y: currentPoint.y - walkerRadius, width: walkerSize, height: walkerSize))
             context.setStrokeColor(UIColor.white.cgColor)
-            context.setLineWidth(ResponsiveLayout.scale(2))
+            context.setLineWidth(2)  // FIXED
             context.strokeEllipse(in: CGRect(x: currentPoint.x - walkerRadius, y: currentPoint.y - walkerRadius, width: walkerSize, height: walkerSize))
             
             // Draw custom emoji
             let emojiAttrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.systemFont(ofSize: ResponsiveLayout.scale(12))
+                .font: UIFont.systemFont(ofSize: 12)  // FIXED
             ]
             let emojiSize = snapshotUserEmoji.size(withAttributes: emojiAttrs)
             let emojiX = currentPoint.x - emojiSize.width / 2
@@ -1044,18 +1068,18 @@ class VideoExporter: ObservableObject {
             snapshotUserEmoji.draw(at: CGPoint(x: emojiX, y: emojiY), withAttributes: emojiAttrs)
         }
         
-        // Title overlay
+        // Title overlay - FIXED font size
         let titleAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: ResponsiveLayout.dynamicFontSize(base: 35), weight: .bold),
+            .font: UIFont.systemFont(ofSize: 35, weight: .bold),
             .foregroundColor: UIColor.white
         ]
         
         let title = friends.isEmpty ? "Your Journey" : "Your Journeys"
         let titleSize = title.size(withAttributes: titleAttrs)
-        title.draw(at: CGPoint(x: (videoSize.width - titleSize.width) / 2, y: ResponsiveLayout.scale(35)), withAttributes: titleAttrs)
+        title.draw(at: CGPoint(x: (videoSize.width - titleSize.width) / 2, y: 35), withAttributes: titleAttrs)
         
-        // Progress bar between map and collage
-        let progressBarY: CGFloat = collageStartY  // 5px above collage (785px)
+        // Progress bar between map and collage - FIXED positions
+        let progressBarY: CGFloat = 785  // collageStartY
         let progressBarHeight: CGFloat = 6
         let progressBarPadding: CGFloat = 40
         let progressBarWidth = videoSize.width - (progressBarPadding * 2)
@@ -1083,27 +1107,18 @@ class VideoExporter: ObservableObject {
         context.addPath(CGPath(roundedRect: progressFillRect, cornerWidth: progressBarHeight / 2, cornerHeight: progressBarHeight / 2, transform: nil))
         context.fillPath()
         
-        // Collage background
-//        let collageStartY: CGFloat = ResponsiveLayout.collageStartY
-//        let collageHeight: CGFloat = ResponsiveLayout.collageHeight
-//        let collageWidth = ResponsiveLayout.collageWidth
-//        let collageX: CGFloat = ResponsiveLayout.collageX
-        //let collageRect = CGRect(x: collageX, y: collageStartY, width: collageWidth, height: collageHeight)
-        
-        
         drawPhotoCollage(context: context, progress: progress)
     }
 
     // MARK: - Photo Collage Drawing (Optimized)
-
     private func drawPhotoCollage(context: CGContext, progress: Double) {
         guard !collageLayout.isEmpty, !prerenderedPhotos.isEmpty else { return }
         
-        // Match the scaled values - use ResponsiveLayout to be consistent
-        let collageStartY: CGFloat = ResponsiveLayout.collageStartY
-        let collageHeight: CGFloat = ResponsiveLayout.collageHeight
-        let collageWidth = ResponsiveLayout.collageWidth
-        let collageX: CGFloat = ResponsiveLayout.collageX
+        // FIXED positions
+        let collageStartY: CGFloat = 800
+        let collageHeight: CGFloat = 460  // videoSize.height - collageStartY - 20
+        let collageWidth: CGFloat = 660   // videoSize.width - 60
+        let collageX: CGFloat = 30
         let collageArea = CGRect(x: collageX, y: collageStartY, width: collageWidth, height: collageHeight)
         
         context.saveGState()
@@ -1375,34 +1390,37 @@ class VideoExporter: ObservableObject {
     }
     
     //MARK: Draw Stats
+    // MARK: - Draw Stats
     private func drawStats(
         context: CGContext,
         frame: Int,
         totalFrames: Int,
         statistics: [String: String]
     ) {
-        // Enable high-quality rendering for entire context
+        // Enable high-quality rendering
         context.setShouldAntialias(true)
         context.setShouldSmoothFonts(true)
         context.interpolationQuality = .high
         
+        // FIXED font sizes
         let titleAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: ResponsiveLayout.dynamicFontSize(base: 50), weight: .bold),
+            .font: UIFont.systemFont(ofSize: 50, weight: .bold),
             .foregroundColor: UIColor.white
         ]
         
         let title = "Your Stats"
         let titleSize = title.size(withAttributes: titleAttrs)
-        title.draw(at: CGPoint(x: (videoSize.width - titleSize.width) / 2, y: ResponsiveLayout.scale(70)), withAttributes: titleAttrs)
+        title.draw(at: CGPoint(x: (videoSize.width - titleSize.width) / 2, y: 70), withAttributes: titleAttrs)
         
         let sortedStats = Array(statistics.sorted(by: { $0.key < $1.key }))
         let progress = Double(frame) / Double(totalFrames)
         
-        let padding: CGFloat = ResponsiveLayout.scale(30)
+        // FIXED spacing
+        let padding: CGFloat = 30
         let cardWidth: CGFloat = videoSize.width - (padding * 2)
-        let startY: CGFloat = ResponsiveLayout.scale(140)
-        let verticalSpacing: CGFloat = ResponsiveLayout.scale(12)
-        let availableHeight = videoSize.height - startY - ResponsiveLayout.scale(30)
+        let startY: CGFloat = 140
+        let verticalSpacing: CGFloat = 12
+        let availableHeight = videoSize.height - startY - 30
         let totalSpacing = verticalSpacing * CGFloat(sortedStats.count - 1)
         let cardHeight: CGFloat = (availableHeight - totalSpacing) / CGFloat(sortedStats.count)
         
@@ -1411,7 +1429,7 @@ class VideoExporter: ObservableObject {
         for (index, (key, value)) in displayStats.enumerated() {
             let y = startY + (CGFloat(index) * (cardHeight + verticalSpacing))
             
-            if y + cardHeight > videoSize.height - ResponsiveLayout.scale(70) {
+            if y + cardHeight > videoSize.height - 70 {
                 continue
             }
             
@@ -1435,13 +1453,13 @@ class VideoExporter: ObservableObject {
                 
                 // Card background
                 context.setFillColor(UIColor.white.withAlphaComponent(0.15 * cardAlpha).cgColor)
-                context.addPath(CGPath(roundedRect: cardRect, cornerWidth: ResponsiveLayout.scale(12), cornerHeight: ResponsiveLayout.scale(12), transform: nil))
+                context.addPath(CGPath(roundedRect: cardRect, cornerWidth: 12, cornerHeight: 12, transform: nil))
                 context.fillPath()
                 
-                // Icon
-                let iconSize: CGFloat = ResponsiveLayout.scale(36)
+                // Icon - FIXED size
+                let iconSize: CGFloat = 36
                 if let icon = systemIconImage(named: iconForStat(key), size: iconSize) {
-                    let iconX = padding + cardWidth - iconSize - ResponsiveLayout.scale(15)
+                    let iconX = padding + cardWidth - iconSize - 15
                     let iconY = y + (cardHeight - iconSize) / 2
                     
                     context.saveGState()
@@ -1451,32 +1469,32 @@ class VideoExporter: ObservableObject {
                     context.restoreGState()
                 }
                 
-                let textPadding: CGFloat = ResponsiveLayout.scale(15)
-                let textWidth = cardWidth - (iconSize + ResponsiveLayout.scale(40))
+                let textPadding: CGFloat = 15
+                let textWidth = cardWidth - (iconSize + 40)
                 
-                // Key text
+                // Key text - FIXED font size
                 let keyAttrs: [NSAttributedString.Key: Any] = [
-                    .font: UIFont.systemFont(ofSize: ResponsiveLayout.dynamicFontSize(base: 18), weight: .semibold),
+                    .font: UIFont.systemFont(ofSize: 18, weight: .semibold),
                     .foregroundColor: UIColor.white.withAlphaComponent(0.85)
                 ]
                 
                 context.saveGState()
                 context.setAlpha(cardAlpha)
                 let keyText = key as NSString
-                let keyRect = CGRect(x: padding + textPadding, y: y + ResponsiveLayout.scale(20), width: textWidth, height: ResponsiveLayout.scale(25))
+                let keyRect = CGRect(x: padding + textPadding, y: y + 20, width: textWidth, height: 25)
                 keyText.draw(in: keyRect, withAttributes: keyAttrs)
                 context.restoreGState()
                 
-                // Value text
+                // Value text - FIXED font size
                 let valueAttrs: [NSAttributedString.Key: Any] = [
-                    .font: UIFont.systemFont(ofSize: ResponsiveLayout.dynamicFontSize(base: 28), weight: .bold),
+                    .font: UIFont.systemFont(ofSize: 28, weight: .bold),
                     .foregroundColor: UIColor.white
                 ]
                 
                 context.saveGState()
                 context.setAlpha(cardAlpha)
                 let valueText = value as NSString
-                let valueRect = CGRect(x: padding + textPadding, y: y + ResponsiveLayout.scale(50), width: textWidth, height: ResponsiveLayout.scale(40))
+                let valueRect = CGRect(x: padding + textPadding, y: y + 50, width: textWidth, height: 40)
                 valueText.draw(in: valueRect, withAttributes: valueAttrs)
                 context.restoreGState()
             }
@@ -1518,6 +1536,7 @@ class VideoExporter: ObservableObject {
         return UIImage(systemName: named, withConfiguration: config)?.withTintColor(.white, renderingMode: .alwaysOriginal)
     }
     
+    // MARK: - Draw Outro
     private func drawOutro(context: CGContext, frame: Int, totalFrames: Int) {
         // Animated fade in
         let progress = Double(frame) / Double(totalFrames)
@@ -1529,11 +1548,11 @@ class VideoExporter: ObservableObject {
             appIcon = icon
         }
         
-        // Draw app icon if available
+        // Draw app icon if available - FIXED sizes
         if let icon = appIcon {
-            let iconSize: CGFloat = ResponsiveLayout.scale(120)
+            let iconSize: CGFloat = 120
             let iconX = (videoSize.width - iconSize) / 2
-            let iconY = videoSize.height / 2 - ResponsiveLayout.scale(100)
+            let iconY = videoSize.height / 2 - 100
             let iconRect = CGRect(x: iconX, y: iconY, width: iconSize, height: iconSize)
             
             context.saveGState()
@@ -1550,42 +1569,42 @@ class VideoExporter: ObservableObject {
             context.restoreGState()
         }
         
-        // Main CTA text
+        // Main CTA text - FIXED font size
         let ctaAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: ResponsiveLayout.dynamicFontSize(base: 48), weight: .bold),
+            .font: UIFont.systemFont(ofSize: 48, weight: .bold),
             .foregroundColor: UIColor.white.withAlphaComponent(fadeIn)
         ]
         
         let cta = "Create Yours"
         let ctaSize = cta.size(withAttributes: ctaAttrs)
         cta.draw(
-            at: CGPoint(x: (videoSize.width - ctaSize.width) / 2, y: videoSize.height / 2 + ResponsiveLayout.scale(40)),
+            at: CGPoint(x: (videoSize.width - ctaSize.width) / 2, y: videoSize.height / 2 + 40),
             withAttributes: ctaAttrs
         )
         
-        // Subtitle text
+        // Subtitle text - FIXED font size
         let subtitleAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: ResponsiveLayout.dynamicFontSize(base: 24), weight: .medium),
+            .font: UIFont.systemFont(ofSize: 24, weight: .medium),
             .foregroundColor: UIColor.white.withAlphaComponent(fadeIn * 0.8)
         ]
         
         let subtitle = "Download Mapped 2025"
         let subtitleSize = subtitle.size(withAttributes: subtitleAttrs)
         subtitle.draw(
-            at: CGPoint(x: (videoSize.width - subtitleSize.width) / 2, y: videoSize.height / 2 + ResponsiveLayout.scale(100)),
+            at: CGPoint(x: (videoSize.width - subtitleSize.width) / 2, y: videoSize.height / 2 + 100),
             withAttributes: subtitleAttrs
         )
         
-        // Additional encouragement text
+        // Additional encouragement text - FIXED font size
         let encourageAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: ResponsiveLayout.dynamicFontSize(base: 18), weight: .regular),
+            .font: UIFont.systemFont(ofSize: 18, weight: .regular),
             .foregroundColor: UIColor.white.withAlphaComponent(fadeIn * 0.7)
         ]
         
         let encourage = "Map your year in photos"
         let encourageSize = encourage.size(withAttributes: encourageAttrs)
         encourage.draw(
-            at: CGPoint(x: (videoSize.width - encourageSize.width) / 2, y: videoSize.height / 2 + ResponsiveLayout.scale(140)),
+            at: CGPoint(x: (videoSize.width - encourageSize.width) / 2, y: videoSize.height / 2 + 140),
             withAttributes: encourageAttrs
         )
     }

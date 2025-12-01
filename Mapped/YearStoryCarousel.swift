@@ -57,7 +57,8 @@ struct YearStoryCarousel: View {
                     rotation: $constellationRotation,
                     backgroundStars: $constellationBackgroundStars,
                     stars: $constellationStars,
-                    connections: $constellationConnections
+                    connections: $constellationConnections,
+                    isGeneratingShare: $isGeneratingShare
                 )
                 .tag(3)
                 
@@ -218,7 +219,7 @@ struct YearStoryCarousel: View {
         let snapshotView = ConstellationSnapshotView(
             locations: photoLoader.locations,
             locationCount: photoLoader.locations.count,
-            scale: constellationScale,
+            scale: 1.0,
             rotation: constellationRotation,
             backgroundStars: constellationBackgroundStars,
             stars: constellationStars,
@@ -277,24 +278,27 @@ struct YearStoryCarousel: View {
 
 // MARK: - Card 1: Welcome
 
+// Around line 230, replace the WelcomeCard struct:
+
 struct WelcomeCard: View {
     @ObservedObject var photoLoader: PhotoLoader
     let accentTeal: Color
+    @Environment(\.colorScheme) var colorScheme
     
     var body: some View {
         ZStack {
-            // Full screen black background
-            Color.black.ignoresSafeArea()
+            (colorScheme == .dark ? Color.black : Color(white: 0.95))
+                .ignoresSafeArea()
             
             VStack(spacing: 0) {
                 Spacer()
                 
                 VStack(spacing: 24) {
-                    Text("2025")
+                    Text("\(photoLoader.photosYear > 0 ? String(photoLoader.photosYear) : "2025")")
                         .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 96), weight: .black))
                         .foregroundStyle(
                             LinearGradient(
-                                colors: [accentTeal, .white],
+                                colors: [accentTeal, colorScheme == .dark ? .white : .black],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             )
@@ -304,17 +308,25 @@ struct WelcomeCard: View {
                     VStack(spacing: 8) {
                         Text("Your Year")
                             .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 32), weight: .light))
-                            .foregroundColor(.white.opacity(0.9))
+                            .foregroundColor(colorScheme == .dark ? .white.opacity(0.9) : .black.opacity(0.8))
                         
                         Text("in Review")
                             .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 32), weight: .light))
-                            .foregroundColor(.white.opacity(0.9))
+                            .foregroundColor(colorScheme == .dark ? .white.opacity(0.9) : .black.opacity(0.8))
+                    }
+                    
+                    if photoLoader.photosYear > 0 && photoLoader.photosYear != Calendar.current.component(.year, from: Date()) {
+                        Text("Using \(String(photoLoader.photosYear)) photos (no \(String(Calendar.current.component(.year, from: Date()))) photos found)")
+                            .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 14), weight: .medium))
+                            .foregroundColor(.yellow.opacity(0.9))
+                            .padding(.horizontal, 40)
+                            .multilineTextAlignment(.center)
                     }
                     
                     HStack(spacing: 40) {
-                        StatPill(value: "\(photoLoader.locations.count)", label: "Places", color: accentTeal)
-                        StatPill(value: String(format: "%.0f", photoLoader.totalDistance / 1609.34), label: "Miles", color: accentTeal)
-                        StatPill(value: "\(photoLoader.totalPhotosWithLocation)", label: "Photos", color: accentTeal)
+                        StatPill(value: "\(photoLoader.locations.count)", label: "Places", color: accentTeal, colorScheme: colorScheme)
+                        StatPill(value: String(format: "%.0f", photoLoader.totalDistance / 1609.34), label: "Miles", color: accentTeal, colorScheme: colorScheme)
+                        StatPill(value: "\(photoLoader.totalPhotosWithLocation)", label: "Photos", color: accentTeal, colorScheme: colorScheme)
                     }
                     .padding(.top, 32)
                 }
@@ -324,7 +336,7 @@ struct WelcomeCard: View {
                 HStack(spacing: 8) {
                     Text("Swipe to explore")
                         .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .black.opacity(0.6))
                     
                     Image(systemName: "arrow.right")
                         .font(.system(size: 14))
@@ -340,6 +352,7 @@ struct StatPill: View {
     let value: String
     let label: String
     let color: Color
+    let colorScheme: ColorScheme
     
     var body: some View {
         VStack(spacing: 6) {
@@ -350,13 +363,13 @@ struct StatPill: View {
             if #available(iOS 16.0, *) {
                 Text(label)
                     .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 13), weight: .medium))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .black.opacity(0.6))
                     .textCase(.uppercase)
                     .kerning(1)
             } else {
                 Text(label)
                     .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 13), weight: .medium))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .black.opacity(0.6))
                     .textCase(.uppercase)
             }
         }
@@ -370,29 +383,40 @@ struct Top12PhotosCard: View {
     let warmCoral: Color
     let softLavender: Color
     @Binding var isGeneratingShare: Bool
+    @Environment(\.colorScheme) var colorScheme
     
     @State private var selectedPhotos: [Int: UIImage] = [:]
-    @State private var photosByMonth: [String: [Int]] = [:] // Store INDICES instead of images
+    @State private var photosByMonth: [String: [(locationIndex: Int, photoIndex: Int)]] = [:]
+    @State private var allPhotoRefs: [(locationIndex: Int, photoIndex: Int)] = []
     @State private var monthKeys: [String] = []
     @State private var isLoadingPhotos = true
     
     var body: some View {
         ZStack {
-            // Full screen gradient
-            LinearGradient(
-                colors: [warmCoral.opacity(0.4), softLavender.opacity(0.4)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+            // UPDATED: Adaptive background
+            if colorScheme == .dark {
+                LinearGradient(
+                    colors: [warmCoral.opacity(0.4), softLavender.opacity(0.4)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+            } else {
+                LinearGradient(
+                    colors: [warmCoral.opacity(0.2), softLavender.opacity(0.2)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+            }
             
             if isLoadingPhotos {
                 VStack {
                     ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .progressViewStyle(CircularProgressViewStyle(tint: colorScheme == .dark ? .white : .black))
                         .scaleEffect(1.5)
                     Text("Loading photos...")
-                        .foregroundColor(.white)
+                        .foregroundColor(colorScheme == .dark ? .white : .black)
                         .padding(.top)
                 }
             } else {
@@ -402,11 +426,11 @@ struct Top12PhotosCard: View {
                     VStack(spacing: 10) {
                         Text("Your Year")
                             .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 50), weight: .bold))
-                            .foregroundColor(.white)
+                            .foregroundColor(colorScheme == .dark ? .white : .black)
                         
                         Text("in 12 Moments")
                             .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 28), weight: .light))
-                            .foregroundColor(.white.opacity(0.9))
+                            .foregroundColor(colorScheme == .dark ? .white.opacity(0.9) : .black.opacity(0.8))
                         
                         if !isGeneratingShare {
                             Text("Tap Pictures to Shuffle")
@@ -435,13 +459,12 @@ struct Top12PhotosCard: View {
                                         .shadow(color: .black.opacity(0.3), radius: 5, x: 0, y: 2)
                                 }
                             } else {
-                                // Loading placeholder
                                 RoundedRectangle(cornerRadius: 12)
-                                    .fill(Color.white.opacity(0.1))
+                                    .fill(colorScheme == .dark ? Color.white.opacity(0.1) : Color.black.opacity(0.05))
                                     .frame(width: ResponsiveLayout.scale(110), height: ResponsiveLayout.scale(110))
                                     .overlay(
                                         ProgressView()
-                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                            .progressViewStyle(CircularProgressViewStyle(tint: colorScheme == .dark ? .white : .black))
                                     )
                             }
                         }
@@ -464,44 +487,59 @@ struct Top12PhotosCard: View {
             let dateFormatter = DateFormatter()
             dateFormatter.dateFormat = "yyyy-MM"
             
-            var grouped: [String: [Int]] = [:] // Store indices instead of images
+            var grouped: [String: [(locationIndex: Int, photoIndex: Int)]] = [:]
             
-            // Group photo INDICES by month
-            for (index, timestamp) in photoLoader.photoTimeStamps.enumerated() {
+            // Build a map of all photos (not just thumbnails) by month
+            for (locIndex, timestamp) in photoLoader.photoTimeStamps.enumerated() {
                 let monthKey = dateFormatter.string(from: timestamp)
-                
                 if grouped[monthKey] == nil {
                     grouped[monthKey] = []
                 }
                 
-                // Store the location index
-                grouped[monthKey]?.append(index)
+                // Add ALL photos at this location, not just the thumbnail
+                let photoCount = photoLoader.allPhotosAtLocation[locIndex].count
+                for photoIndex in 0..<photoCount {
+                    grouped[monthKey]?.append((locIndex, photoIndex))
+                }
             }
             
             let sortedMonthKeys = grouped.keys.sorted()
-            let allIndices = Array(0..<photoLoader.locations.count)
             
-            // Load first photo for each of the 12 slots
+            // Build a flat list of all photo references
+            var allPhotoRefs: [(locationIndex: Int, photoIndex: Int)] = []
+            for (locIndex, photosAtLoc) in photoLoader.allPhotosAtLocation.enumerated() {
+                for photoIndex in 0..<photosAtLoc.count {
+                    allPhotoRefs.append((locIndex, photoIndex))
+                }
+            }
+            
             let dispatchGroup = DispatchGroup()
             var loadedPhotos: [Int: UIImage] = [:]
+            let lock = NSLock()
             
             for slot in 0..<12 {
                 dispatchGroup.enter()
                 
-                let photoIndex: Int
+                let photoRef: (locationIndex: Int, photoIndex: Int)
                 if slot < sortedMonthKeys.count {
                     let monthKey = sortedMonthKeys[slot]
-                    photoIndex = grouped[monthKey]?.first ?? 0
+                    photoRef = grouped[monthKey]?.randomElement() ?? allPhotoRefs.randomElement() ?? (0, 0)
                 } else {
-                    // Use random photo for missing months
-                    photoIndex = allIndices.randomElement() ?? 0
+                    photoRef = allPhotoRefs.randomElement() ?? (0, 0)
                 }
                 
-                // Load the actual image from disk
-                photoLoader.loadThumbnail(at: photoIndex) { image in
-                    if let image = image {
-                        loadedPhotos[slot] = image
+                // Load the specific photo from disk
+                photoLoader.loadPhotosAtLocation(at: photoRef.locationIndex) { images in
+                    lock.lock()
+                    if let images = images, photoRef.photoIndex < images.count {
+                        loadedPhotos[slot] = images[photoRef.photoIndex]
+                    } else if photoRef.locationIndex < photoLoader.thumbnails.count {
+                        // FALLBACK: Use thumbnail
+                        loadedPhotos[slot] = photoLoader.thumbnails[photoRef.locationIndex]
+                    } else {
+                        loadedPhotos[slot] = self.createPlaceholder()
                     }
+                    lock.unlock()
                     dispatchGroup.leave()
                 }
             }
@@ -509,45 +547,40 @@ struct Top12PhotosCard: View {
             dispatchGroup.notify(queue: .main) {
                 self.photosByMonth = grouped
                 self.monthKeys = sortedMonthKeys
+                self.allPhotoRefs = allPhotoRefs
                 self.selectedPhotos = loadedPhotos
                 self.isLoadingPhotos = false
+                
+                print("📸 Loaded \(loadedPhotos.count)/12 photos from ALL photos in library")
             }
         }
     }
     
     private func shufflePhoto(at slot: Int) {
-        // Get the indices pool for this slot
-        let indicesPool: [Int]
+        let photoRefsPool: [(locationIndex: Int, photoIndex: Int)]
         
         if slot < monthKeys.count {
-            // Use photos from this month
             let key = monthKeys[slot]
-            indicesPool = photosByMonth[key] ?? Array(0..<photoLoader.locations.count)
+            photoRefsPool = photosByMonth[key] ?? allPhotoRefs
         } else {
-            // For slots beyond available months, use all photos
-            indicesPool = Array(0..<photoLoader.locations.count)
+            photoRefsPool = allPhotoRefs
         }
         
-        // Need at least 2 photos to shuffle
-        guard indicesPool.count > 1 else { return }
+        guard photoRefsPool.count > 1 else { return }
         
-        // Find current photo's index
-        guard let currentImage = selectedPhotos[slot],
-              let currentIndex = photoLoader.thumbnails.firstIndex(where: { $0 === currentImage }) else {
-            return
-        }
+        // Pick a random photo reference
+        let newPhotoRef = photoRefsPool.randomElement()!
         
-        // Pick different index from the pool
-        var newIndex = indicesPool.randomElement()!
-        while newIndex == currentIndex && indicesPool.count > 1 {
-            newIndex = indicesPool.randomElement()!
-        }
-        
-        // Load the new image
-        photoLoader.loadThumbnail(at: newIndex) { image in
-            if let image = image {
+        // Load the photo from disk
+        photoLoader.loadPhotosAtLocation(at: newPhotoRef.locationIndex) { images in
+            if let images = images, newPhotoRef.photoIndex < images.count {
                 withAnimation(.spring(response: 0.3)) {
-                    selectedPhotos[slot] = image
+                    selectedPhotos[slot] = images[newPhotoRef.photoIndex]
+                }
+            } else if newPhotoRef.locationIndex < photoLoader.thumbnails.count {
+                // FALLBACK: Use in-memory thumbnail
+                withAnimation(.spring(response: 0.3)) {
+                    selectedPhotos[slot] = photoLoader.thumbnails[newPhotoRef.locationIndex]
                 }
             }
         }
@@ -570,35 +603,42 @@ struct StatsHighlightCard: View {
     let accentTeal: Color
     let warmCoral: Color
     let deepPurple: Color
+    @Environment(\.colorScheme) var colorScheme  // ADD THIS
     
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
+        ZStack {
+            // UPDATED: Adaptive background
+            (colorScheme == .dark ? Color.black : Color(white: 0.95))
+                .ignoresSafeArea()
             
-            VStack(spacing: 32) {
-                VStack(spacing: 8) {
-                    Text("Your Journey")
-                        .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 42), weight: .bold))
-                        .foregroundColor(.white)
+            VStack(spacing: 0) {
+                Spacer()
+                
+                VStack(spacing: 32) {
+                    VStack(spacing: 8) {
+                        Text("Your Journey")
+                            .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 42), weight: .bold))
+                            .foregroundColor(colorScheme == .dark ? .white : .black)
+                        
+                        Text("by the numbers")
+                            .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 20), weight: .light))
+                            .foregroundColor(colorScheme == .dark ? .white.opacity(0.8) : .black.opacity(0.7))
+                    }
                     
-                    Text("by the numbers")
-                        .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 20), weight: .light))
-                        .foregroundColor(.white.opacity(0.8))
+                    VStack(spacing: 24) {
+                        BigStatRow(icon: "figure.walk", label: "Total Distance", value: String(format: "%.1f miles", photoLoader.totalDistance / 1609.34), color: accentTeal, colorScheme: colorScheme)
+                        BigStatRow(icon: "mappin.circle.fill", label: "Places Visited", value: "\(photoLoader.locations.count)", color: warmCoral, colorScheme: colorScheme)
+                        BigStatRow(icon: "camera.fill", label: "Photos Captured", value: "\(photoLoader.totalPhotosWithLocation)", color: deepPurple, colorScheme: colorScheme)
+                        
+                        if let mostActive = getMostActiveMonth() {
+                            BigStatRow(icon: "calendar", label: "Most Active Month", value: mostActive, color: Color(red: 1.0, green: 0.6, blue: 0.3), colorScheme: colorScheme)
+                        }
+                    }
+                    .padding(.horizontal, 32)
                 }
                 
-                VStack(spacing: 24) {
-                    BigStatRow(icon: "figure.walk", label: "Total Distance", value: String(format: "%.1f miles", photoLoader.totalDistance / 1609.34), color: accentTeal)
-                    BigStatRow(icon: "mappin.circle.fill", label: "Places Visited", value: "\(photoLoader.locations.count)", color: warmCoral)
-                    BigStatRow(icon: "camera.fill", label: "Photos Captured", value: "\(photoLoader.totalPhotosWithLocation)", color: deepPurple)
-                    
-                    if let mostActive = getMostActiveMonth() {
-                        BigStatRow(icon: "calendar", label: "Most Active Month", value: mostActive, color: Color(red: 1.0, green: 0.6, blue: 0.3))
-                    }
-                }
-                .padding(.horizontal, 32)
+                Spacer()
             }
-            
-            Spacer()
         }
     }
     
@@ -623,6 +663,7 @@ struct BigStatRow: View {
     let label: String
     let value: String
     let color: Color
+    let colorScheme: ColorScheme
     
     var body: some View {
         HStack(spacing: 20) {
@@ -640,26 +681,26 @@ struct BigStatRow: View {
                 if #available(iOS 16.0, *) {
                     Text(label)
                         .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 14), weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .black.opacity(0.6))
                         .textCase(.uppercase)
                         .kerning(0.5)
                 } else {
                     Text(label)
                         .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 14), weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .black.opacity(0.6))
                         .textCase(.uppercase)
                 }
                 
                 Text(value)
                     .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 26), weight: .bold))
-                    .foregroundColor(.white)
+                    .foregroundColor(colorScheme == .dark ? .white : .black)
             }
             
             Spacer()
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
-        .background(Color.white.opacity(0.08))
+        .background(colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.05))
         .cornerRadius(16)
     }
 }
@@ -672,77 +713,88 @@ struct UniqueInsightsCard: View {
     let warmCoral: Color
     let deepPurple: Color
     let softLavender: Color
+    @Environment(\.colorScheme) var colorScheme  // ADD THIS
     
     var body: some View {
         GeometryReader { geometry in
-            let isSmallDevice = geometry.size.height < 750  // iPhone SE, etc.
-            let isMediumDevice = geometry.size.height < 900  // iPhone 13/14/15
+            let isSmallDevice = geometry.size.height < 750
+            let isMediumDevice = geometry.size.height < 900
             
-            VStack(spacing: 0) {
-                Spacer()
+            ZStack {
+                // UPDATED: Adaptive background
+                (colorScheme == .dark ? Color.black : Color(white: 0.95))
+                    .ignoresSafeArea()
                 
-                VStack(spacing: isSmallDevice ? 12 : isMediumDevice ? 16 : 20) {
-                    VStack(spacing: 8) {
-                        Text("Personal")
-                            .font(.system(size: isSmallDevice ? 32 : isMediumDevice ? 36 : 38, weight: .bold))
-                            .foregroundColor(.white)
+                VStack(spacing: 0) {
+                    Spacer()
+                    
+                    VStack(spacing: isSmallDevice ? 12 : isMediumDevice ? 16 : 20) {
+                        VStack(spacing: 8) {
+                            Text("Personal")
+                                .font(.system(size: isSmallDevice ? 32 : isMediumDevice ? 36 : 38, weight: .bold))
+                                .foregroundColor(colorScheme == .dark ? .white : .black)
+                            
+                            Text("Insights")
+                                .font(.system(size: isSmallDevice ? 32 : isMediumDevice ? 36 : 38, weight: .bold))
+                                .foregroundColor(colorScheme == .dark ? .white.opacity(0.6) : .black.opacity(0.5))
+                        }
                         
-                        Text("Insights")
-                            .font(.system(size: isSmallDevice ? 32 : isMediumDevice ? 36 : 38, weight: .bold))
-                            .foregroundColor(.white.opacity(0.6))
+                        VStack(spacing: isSmallDevice ? 8 : isMediumDevice ? 10 : 12) {
+                            if let homeBase = findHomeBase() {
+                                InsightCard(
+                                    emoji: "🏠",
+                                    title: "Your Home Base",
+                                    description: getHomeBaseDescription(homeBase),
+                                    gradient: [accentTeal, accentTeal.opacity(0.6)],
+                                    isSmallDevice: isSmallDevice,
+                                    isMediumDevice: isMediumDevice,
+                                    colorScheme: colorScheme
+                                )
+                            }
+                            
+                            if let photoStyle = getPhotoStyle() {
+                                InsightCard(
+                                    emoji: photoStyle.isEarlyBird ? "🌅" : "🌃",
+                                    title: photoStyle.isEarlyBird ? "Early Bird" : "Night Owl",
+                                    description: photoStyle.description,
+                                    gradient: photoStyle.isEarlyBird ?
+                                        [Color(red: 1.0, green: 0.7, blue: 0.3), Color(red: 1.0, green: 0.9, blue: 0.4)] :
+                                        [deepPurple, softLavender],
+                                    isSmallDevice: isSmallDevice,
+                                    isMediumDevice: isMediumDevice,
+                                    colorScheme: colorScheme
+                                )
+                            }
+                            
+                            if let explorationStyle = getExplorationStyle() {
+                                InsightCard(
+                                    emoji: explorationStyle.emoji,
+                                    title: explorationStyle.title,
+                                    description: explorationStyle.description,
+                                    gradient: [accentTeal.opacity(0.8), Color(red: 0.3, green: 0.9, blue: 0.6)],
+                                    isSmallDevice: isSmallDevice,
+                                    isMediumDevice: isMediumDevice,
+                                    colorScheme: colorScheme
+                                )
+                            }
+                            
+                            if let achievement = getDistanceAchievement() {
+                                InsightCard(
+                                    emoji: "🌎",
+                                    title: achievement.title,
+                                    description: achievement.description,
+                                    gradient: [warmCoral, Color(red: 1.0, green: 0.5, blue: 0.3)],
+                                    isSmallDevice: isSmallDevice,
+                                    isMediumDevice: isMediumDevice,
+                                    colorScheme: colorScheme
+                                )
+                            }
+                        }
+                        .padding(.horizontal, isSmallDevice ? 20 : 24)
                     }
                     
-                    VStack(spacing: isSmallDevice ? 8 : isMediumDevice ? 10 : 12) {
-                        if let homeBase = findHomeBase() {
-                            InsightCard(
-                                emoji: "🏠",
-                                title: "Your Home Base",
-                                description: getHomeBaseDescription(homeBase),
-                                gradient: [accentTeal, accentTeal.opacity(0.6)],
-                                isSmallDevice: isSmallDevice,
-                                isMediumDevice: isMediumDevice
-                            )
-                        }
-                        
-                        if let photoStyle = getPhotoStyle() {
-                            InsightCard(
-                                emoji: photoStyle.isEarlyBird ? "🌅" : "🌃",
-                                title: photoStyle.isEarlyBird ? "Early Bird" : "Night Owl",
-                                description: photoStyle.description,
-                                gradient: photoStyle.isEarlyBird ?
-                                    [Color(red: 1.0, green: 0.7, blue: 0.3), Color(red: 1.0, green: 0.9, blue: 0.4)] :
-                                    [deepPurple, softLavender],
-                                isSmallDevice: isSmallDevice,
-                                isMediumDevice: isMediumDevice
-                            )
-                        }
-                        
-                        if let explorationStyle = getExplorationStyle() {
-                            InsightCard(
-                                emoji: explorationStyle.emoji,
-                                title: explorationStyle.title,
-                                description: explorationStyle.description,
-                                gradient: [accentTeal.opacity(0.8), Color(red: 0.3, green: 0.9, blue: 0.6)],
-                                isSmallDevice: isSmallDevice,
-                                isMediumDevice: isMediumDevice
-                            )
-                        }
-                        
-                        if let achievement = getDistanceAchievement() {
-                            InsightCard(
-                                emoji: "🌎",
-                                title: achievement.title,
-                                description: achievement.description,
-                                gradient: [warmCoral, Color(red: 1.0, green: 0.5, blue: 0.3)],
-                                isSmallDevice: isSmallDevice,
-                                isMediumDevice: isMediumDevice
-                            )
-                        }
-                    }
-                    .padding(.horizontal, isSmallDevice ? 20 : 24)
+                    Spacer()
                 }
-                
-                Spacer()
             }
         }
     }
@@ -867,6 +919,7 @@ struct InsightCard: View {
     let gradient: [Color]
     let isSmallDevice: Bool
     let isMediumDevice: Bool
+    let colorScheme: ColorScheme
     
     var body: some View {
         VStack(alignment: .leading, spacing: isSmallDevice ? 8 : isMediumDevice ? 10 : 12) {
@@ -875,13 +928,13 @@ struct InsightCard: View {
             
             Text(title)
                 .font(.system(size: isSmallDevice ? 17 : isMediumDevice ? 18 : 20, weight: .bold))
-                .foregroundColor(.white)
+                .foregroundColor(colorScheme == .dark ? .white : .black)
                 .minimumScaleFactor(0.8)
                 .lineLimit(1)
             
             Text(description)
                 .font(.system(size: isSmallDevice ? 13 : isMediumDevice ? 13.5 : 14, weight: .medium))
-                .foregroundColor(.white.opacity(0.8))
+                .foregroundColor(colorScheme == .dark ? .white.opacity(0.8) : .black.opacity(0.7))
                 .lineSpacing(isSmallDevice ? 2 : 3)
                 .minimumScaleFactor(0.9)
                 .lineLimit(2)
@@ -890,7 +943,7 @@ struct InsightCard: View {
         .padding(isSmallDevice ? 14 : isMediumDevice ? 16 : 18)
         .background(
             LinearGradient(
-                colors: gradient.map { $0.opacity(0.3) },
+                colors: gradient.map { $0.opacity(colorScheme == .dark ? 0.3 : 0.2) },
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -921,6 +974,8 @@ struct ConstellationCard: View {
     @Binding var backgroundStars: [(x: CGFloat, y: CGFloat, size: CGFloat, opacity: Double)]
     @Binding var stars: [ConstellationStar]
     @Binding var connections: [ConstellationConnection]
+    @Binding var isGeneratingShare: Bool
+    @Environment(\.colorScheme) var colorScheme  // ADD THIS
     
     @State private var revealProgress: Double = 0.0
     @State private var hasAppeared = false
@@ -929,9 +984,11 @@ struct ConstellationCard: View {
     @State private var hasBuiltConstellation = false
     @State private var offset: CGSize = .zero
     @State private var lastOffset: CGSize = .zero
+    @State private var showReplayButton = false
     
     var body: some View {
         ZStack {
+            // Constellation always has black background
             Color.black.ignoresSafeArea()
             
             ForEach(Array(backgroundStars.enumerated()), id: \.offset) { index, star in
@@ -945,14 +1002,15 @@ struct ConstellationCard: View {
                 Spacer().frame(height: 100)
                 
                 VStack(spacing: 15) {
-                    Text("Your 2025")
-                        .font(.system(size: 48, weight: .bold))
-                        .foregroundColor(.white)
-                    
-                    Text("Constellation")
-                        .font(.system(size: 32, weight: .light))
-                        .foregroundColor(accentTeal.opacity(0.9))
-                }
+                        // ✅ Dynamic year
+                            Text("Your \(photoLoader.photosYear > 0 ? String(photoLoader.photosYear) : String(Calendar.current.component(.year, from: Date())))")
+                                        .font(.system(size: 48, weight: .bold))
+                                        .foregroundColor(.white)
+                                    
+                            Text("Constellation")
+                                        .font(.system(size: 32, weight: .light))
+                                        .foregroundColor(accentTeal.opacity(0.9))
+                                }
                 
                 Spacer()
                 
@@ -1008,16 +1066,12 @@ struct ConstellationCard: View {
                             }
                         }
                         .frame(width: containerWidth, height: containerHeight)
-                        .onAppear {
-                            // Constellation is built by ContentView
-                            hasBuiltConstellation = true
-                        }
                     }
                     .frame(height: ResponsiveLayout.scaleHeight(450))
                     .padding(.horizontal, 30)
-                    .offset(offset)
                     .scaleEffect(scale)
                     .rotationEffect(rotation)
+                    .offset(offset)
                     .contentShape(Rectangle())
                     .gesture(
                         SimultaneousGesture(
@@ -1034,9 +1088,13 @@ struct ConstellationCard: View {
                             SimultaneousGesture(
                                 MagnificationGesture()
                                     .onChanged { value in
-                                        scale = lastScale * value
+                                        let newScale = lastScale * value
+                                        // Clamp scale between 0.5 and 5.0 to prevent crashes
+                                        scale = min(5.0, max(0.5, newScale))
                                     }
                                     .onEnded { value in
+                                        let newScale = lastScale * value
+                                        scale = min(5.0, max(0.5, newScale))
                                         lastScale = scale
                                     },
                                 RotationGesture()
@@ -1063,27 +1121,75 @@ struct ConstellationCard: View {
                     .foregroundColor(.white.opacity(0.5))
                     .padding(.bottom, 80)
             }
+            
+            // NEW: Replay button (bottom-left position)
+            if showReplayButton && !isGeneratingShare {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Button(action: resetConstellation) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "arrow.counterclockwise")
+                                    .font(.system(size: 14, weight: .semibold))
+                                Text("Reset")
+                                    .font(.system(size: 13, weight: .semibold))
+                            }
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.white.opacity(0.25))
+                            .clipShape(Capsule())
+                            .shadow(color: .black.opacity(0.3), radius: 3)
+                        }
+                        .padding(.leading, 16)
+                        .padding(.bottom, 100)
+                        Spacer()
+                    }
+                }
+                .transition(.opacity)
+            }
         }
         .onAppear {
             if !hasAppeared {
                 generateBackgroundStars()
+                hasBuiltConstellation = true  // Mark as built BEFORE reset
                 hasAppeared = true
                 
-                // Initialize lastScale and lastRotation from binding values
+                // Initialize from bindings
                 lastScale = scale
                 lastRotation = rotation
                 lastOffset = offset
                 
-                withAnimation(.easeInOut(duration: 2.5)) {
-                    revealProgress = 1.0
-                }
+                // NOW reset and start animation
+                resetConstellation()
             }
         }
         .onDisappear {
             revealProgress = 0.0
             hasAppeared = false
             hasBuiltConstellation = false
+            showReplayButton = false
         }
+    }
+    
+    // Reset function
+    private func resetConstellation() {
+        // Reset all transformations
+        scale = 1.0
+        rotation = .zero
+        offset = .zero
+        lastScale = 1.0
+        lastRotation = .zero
+        lastOffset = .zero
+        revealProgress = 0.0
+        showReplayButton = false
+        
+        // Restart animation
+        withAnimation(.easeInOut(duration: 2.5)) {
+            revealProgress = 1.0
+        }
+        
+        print("🔄 Reset constellation - stars: \(stars.count), built: \(hasBuiltConstellation)")
     }
     
     private func generateBackgroundStars() {
@@ -1092,10 +1198,10 @@ struct ConstellationCard: View {
         let screenWidth = UIScreen.main.bounds.width
         let screenHeight = UIScreen.main.bounds.height
         
-        var stars: [(x: CGFloat, y: CGFloat, size: CGFloat, opacity: Double)] = []
+        var newStars: [(x: CGFloat, y: CGFloat, size: CGFloat, opacity: Double)] = []
         
         for _ in 0..<150 {
-            stars.append((
+            newStars.append((
                 x: CGFloat.random(in: 0...screenWidth),
                 y: CGFloat.random(in: 0...screenHeight),
                 size: CGFloat.random(in: 1...3),
@@ -1103,13 +1209,21 @@ struct ConstellationCard: View {
             ))
         }
         
-        backgroundStars = stars
+        backgroundStars = newStars
     }
     
     private func scaleStarsToContainer(stars: [ConstellationStar], containerSize: CGSize) -> [ConstellationStar] {
         guard !stars.isEmpty else { return [] }
         
-        // Find bounds
+        // ✅ Handle single star - return centered
+        if stars.count == 1 {
+            return [ConstellationStar(
+                coordinate: stars[0].coordinate,
+                intensity: stars[0].intensity,
+                screenPosition: CGPoint(x: containerSize.width / 2, y: containerSize.height / 2)
+            )]
+        }
+        
         var minX = stars[0].screenPosition.x
         var maxX = stars[0].screenPosition.x
         var minY = stars[0].screenPosition.y
@@ -1125,7 +1239,18 @@ struct ConstellationCard: View {
         let originalWidth = maxX - minX
         let originalHeight = maxY - minY
         
-        // Scale to fit with padding
+        // ✅ Prevent division by zero
+        guard originalWidth > 0 && originalHeight > 0 else {
+            // If all stars are at same position, center them
+            return stars.map { star in
+                ConstellationStar(
+                    coordinate: star.coordinate,
+                    intensity: star.intensity,
+                    screenPosition: CGPoint(x: containerSize.width / 2, y: containerSize.height / 2)
+                )
+            }
+        }
+        
         let padding: CGFloat = 40
         let availableWidth = containerSize.width - (padding * 2)
         let availableHeight = containerSize.height - (padding * 2)
@@ -1134,7 +1259,6 @@ struct ConstellationCard: View {
         let scaleY = availableHeight / originalHeight
         let scaleFactor = min(scaleX, scaleY)
         
-        // Center in container
         let scaledWidth = originalWidth * scaleFactor
         let scaledHeight = originalHeight * scaleFactor
         let offsetX = (containerSize.width - scaledWidth) / 2
@@ -1267,61 +1391,68 @@ struct MapPreviewCard: View {
     let accentTeal: Color
     let onNavigate: () -> Void
     @Binding var isGeneratingShare: Bool
+    @Environment(\.colorScheme) var colorScheme  // ADD THIS
     @State private var mapSnapshot: UIImage?
     
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
+        ZStack {
+            // UPDATED: Adaptive background
+            (colorScheme == .dark ? Color.black : Color(white: 0.95))
+                .ignoresSafeArea()
             
-            VStack(spacing: 32) {
-                VStack(spacing: 8) {
-                    Text("Your Path")
-                        .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 42), weight: .bold))
-                        .foregroundColor(.white)
-                    
-                    Text("across 2025")
-                        .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 20), weight: .light))
-                        .foregroundColor(.white.opacity(0.8))
-                }
+            VStack(spacing: 0) {
+                Spacer()
                 
-                if let snapshot = mapSnapshot {
-                    Button(action: onNavigate) {
-                        Image(uiImage: snapshot)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(height: ResponsiveLayout.scaleHeight(400))
-                            .frame(maxWidth: .infinity)
-                            .clipped()  // ADD: Clip overflow
-                            .cornerRadius(24)
-                            .shadow(color: accentTeal.opacity(0.3), radius: 20)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 24)
-                                    .stroke(accentTeal.opacity(0.5), lineWidth: 2)
-                            )
+                VStack(spacing: 32) {
+                    VStack(spacing: 8) {
+                        Text("Your Path")
+                            .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 42), weight: .bold))
+                            .foregroundColor(colorScheme == .dark ? .white : .black)
+                        
+                        // ✅ Dynamic year
+                        Text("across \(photoLoader.photosYear > 0 ? String(photoLoader.photosYear) : String(Calendar.current.component(.year, from: Date())))")
+                            .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 20), weight: .light))
+                            .foregroundColor(colorScheme == .dark ? .white.opacity(0.8) : .black.opacity(0.7))
                     }
-                    .padding(.horizontal, 24)
-                } else {
-                    RoundedRectangle(cornerRadius: 24)
-                        .fill(Color.white.opacity(0.1))
-                        .frame(height: ResponsiveLayout.scaleHeight(400))
-                        .overlay(
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: accentTeal))
-                                .scaleEffect(1.5)
-                        )
+                    
+                    if let snapshot = mapSnapshot {
+                        Button(action: onNavigate) {
+                            Image(uiImage: snapshot)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(height: ResponsiveLayout.scaleHeight(400))
+                                .frame(maxWidth: .infinity)
+                                .clipped()
+                                .cornerRadius(24)
+                                .shadow(color: accentTeal.opacity(0.3), radius: 20)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 24)
+                                        .stroke(accentTeal.opacity(0.5), lineWidth: 2)
+                                )
+                        }
                         .padding(.horizontal, 24)
+                    } else {
+                        RoundedRectangle(cornerRadius: 24)
+                            .fill(colorScheme == .dark ? Color.white.opacity(0.1) : Color.black.opacity(0.05))
+                            .frame(height: ResponsiveLayout.scaleHeight(400))
+                            .overlay(
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: accentTeal))
+                                    .scaleEffect(1.5)
+                            )
+                            .padding(.horizontal, 24)
+                    }
+                    
+                    if !isGeneratingShare {
+                        Text("Tap map to explore")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundColor(accentTeal.opacity(0.9))
+                    }
                 }
+                .padding(.horizontal, 24)
                 
-                // ONLY show when NOT generating share
-                if !isGeneratingShare {
-                    Text("Tap map to explore")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(accentTeal.opacity(0.9))
-                }
+                Spacer()
             }
-            .padding(.horizontal, 24)
-            
-            Spacer()
         }
         .onAppear {
             generateMapSnapshot()
@@ -1420,75 +1551,82 @@ struct MapPreviewCard: View {
 struct FinalCTACard: View {
     let accentTeal: Color
     let onNavigate: (String?) -> Void
+    @Environment(\.colorScheme) var colorScheme  // ADD THIS
     @State private var pulseAnimation = false
     
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
+        ZStack {
+            // UPDATED: Adaptive background
+            (colorScheme == .dark ? Color.black : Color(white: 0.95))
+                .ignoresSafeArea()
             
-            VStack(spacing: 48) {
-                ZStack {
-                    Circle()
-                        .fill(accentTeal.opacity(0.2))
-                        .frame(width: 120, height: 120)
-                        .scaleEffect(pulseAnimation ? 1.3 : 1.0)
-                        .opacity(pulseAnimation ? 0 : 1)
+            VStack(spacing: 0) {
+                Spacer()
+                
+                VStack(spacing: 48) {
+                    ZStack {
+                        Circle()
+                            .fill(accentTeal.opacity(0.2))
+                            .frame(width: 120, height: 120)
+                            .scaleEffect(pulseAnimation ? 1.3 : 1.0)
+                            .opacity(pulseAnimation ? 0 : 1)
+                        
+                        Circle()
+                            .fill(accentTeal.opacity(0.3))
+                            .frame(width: 100, height: 100)
+                        
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 48))
+                            .foregroundColor(accentTeal)
+                    }
                     
-                    Circle()
-                        .fill(accentTeal.opacity(0.3))
-                        .frame(width: 100, height: 100)
+                    VStack(spacing: 16) {
+                        Text("Ready to")
+                            .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 38), weight: .bold))
+                            .foregroundColor(colorScheme == .dark ? .white : .black)
+                        
+                        Text("Explore?")
+                            .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 38), weight: .bold))
+                            .foregroundColor(accentTeal)
+                    }
                     
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 48))
-                        .foregroundColor(accentTeal)
+                    VStack(spacing: 16) {
+                        Button(action: {
+                            onNavigate("Map")
+                        }) {
+                            FeaturePillButton(icon: "map.fill", text: "Interactive Map", color: accentTeal, colorScheme: colorScheme)
+                        }
+                        
+                        Button(action: {
+                            onNavigate("Share")
+                        }) {
+                            FeaturePillButton(icon: "video.fill", text: "Create Collage Video", color: accentTeal, colorScheme: colorScheme)
+                        }
+                        
+                        Button(action: {
+                            onNavigate("Friends")
+                        }) {
+                            FeaturePillButton(icon: "person.2.fill", text: "Share with Friends", color: accentTeal, colorScheme: colorScheme)
+                        }
+                    }
                 }
                 
-                VStack(spacing: 16) {
-                    Text("Ready to")
-                        .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 38), weight: .bold))
-                        .foregroundColor(.white)
-                    
-                    Text("Explore?")
-                        .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 38), weight: .bold))
-                        .foregroundColor(accentTeal)
-                }
+                Spacer()
                 
-                VStack(spacing: 16) {
-                    Button(action: {
-                        onNavigate("Map")
-                    }) {
-                        FeaturePillButton(icon: "map.fill", text: "Interactive Map", color: accentTeal)
-                    }
-                    
-                    Button(action: {
-                        onNavigate("Share")
-                    }) {
-                        FeaturePillButton(icon: "video.fill", text: "Create Collage Video", color: accentTeal)
-                    }
-                    
-                    Button(action: {
-                        onNavigate("Friends")
-                    }) {
-                        FeaturePillButton(icon: "person.2.fill", text: "Share with Friends", color: accentTeal)
-                    }
+                Button(action: {
+                    onNavigate(nil)
+                }) {
+                    Text("Explore Everything")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(colorScheme == .dark ? .black : .white)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(accentTeal)
+                        .cornerRadius(14)
                 }
+                .padding(.horizontal, 40)
+                .padding(.bottom, 40)
             }
-            
-            Spacer()
-            
-            Button(action: {
-                onNavigate(nil)
-            }) {
-                Text("Explore Everything")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundColor(.black)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(accentTeal)
-                    .cornerRadius(14)
-            }
-            .padding(.horizontal, 40)
-            .padding(.bottom, 40)
         }
         .onAppear {
             withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: false)) {
@@ -1502,6 +1640,7 @@ struct FeaturePillButton: View {
     let icon: String
     let text: String
     let color: Color
+    let colorScheme: ColorScheme
     
     var body: some View {
         HStack(spacing: 12) {
@@ -1512,7 +1651,7 @@ struct FeaturePillButton: View {
             
             Text(text)
                 .font(.system(size: ResponsiveLayout.dynamicFontSize(base: 16), weight: .medium))
-                .foregroundColor(.white)
+                .foregroundColor(colorScheme == .dark ? .white : .black)
             
             Spacer()
             
@@ -1522,7 +1661,7 @@ struct FeaturePillButton: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
-        .background(Color.white.opacity(0.15))
+        .background(colorScheme == .dark ? Color.white.opacity(0.15) : Color.black.opacity(0.08))
         .cornerRadius(12)
         .padding(.horizontal, 40)
     }

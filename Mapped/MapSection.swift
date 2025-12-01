@@ -416,19 +416,30 @@ struct MapSection: View {
         }
     }
     
+    // Replace the playAnimation method in MapSection.swift (around line 650)
+
     private func playAnimation() {
         guard !photoLoader.locations.isEmpty else { return }
         
+        // FIX: Ensure currentDate is set properly
         if currentDate == nil {
             currentDate = photoLoader.photoTimeStamps.first
+            animationIndex = 0
+            
+            // Reset friend animation indices
             for friend in photoLoader.friends {
                 photoLoader.friendAnimationIndices[friend.id] = 0
             }
         }
         
+        // FIX: Cancel any existing timer first
+        animationTimer?.invalidate()
+        animationTimer = nil
+        
         isAnimating = true
         
-        animationTimer = Timer.scheduledTimer(withTimeInterval: animationSpeed, repeats: true) { _ in
+        // FIX: Use a more reliable timer method that works on iPad simulator
+        let timer = Timer(timeInterval: animationSpeed, repeats: true) { _ in
             guard let current = currentDate else { return }
             
             guard let startDate = photoLoader.photoTimeStamps.first,
@@ -437,25 +448,41 @@ struct MapSection: View {
             let totalTimeInterval = endDate.timeIntervalSince(startDate)
             guard totalTimeInterval > 0 else { return }
             
-            let timeStep: TimeInterval = 86400
+            let timeStep: TimeInterval = 86400 // 1 day
             let newDate = current.addingTimeInterval(timeStep)
             
             if newDate <= endDate {
-                withAnimation(.easeInOut(duration: animationSpeed * 0.8)) {
-                    currentDate = newDate
-                    animationIndex = findClosestIndex(for: newDate, in: photoLoader.photoTimeStamps)
-                    
-                    for friend in photoLoader.getVisibleFriends() {
-                        let friendIndex = findClosestIndex(for: newDate, in: friend.timestamps)
-                        photoLoader.friendAnimationIndices[friend.id] = friendIndex
+                // FIX: Use DispatchQueue.main.async for smoother updates on iPad
+                DispatchQueue.main.async {
+                    withAnimation(.easeInOut(duration: self.animationSpeed * 0.8)) {
+                        self.currentDate = newDate
+                        self.animationIndex = self.findClosestIndex(for: newDate, in: self.photoLoader.photoTimeStamps)
+                        
+                        // Update friend positions
+                        for friend in self.photoLoader.getVisibleFriends() {
+                            let friendIndex = self.findClosestIndex(for: newDate, in: friend.timestamps)
+                            self.photoLoader.friendAnimationIndices[friend.id] = friendIndex
+                        }
+                        
+                        // Update slider
+                        self.sliderValue = newDate.timeIntervalSince(startDate) / totalTimeInterval
                     }
-                    
-                    sliderValue = newDate.timeIntervalSince(startDate) / totalTimeInterval
                 }
             } else {
-                pauseAnimation()
+                self.pauseAnimation()
             }
         }
+        
+        // FIX: Add to common run loop modes for better iPad simulator compatibility
+        RunLoop.main.add(timer, forMode: .common)
+        self.animationTimer = timer
+    }
+
+    // Also update pauseAnimation to be more explicit
+    private func pauseAnimation() {
+        isAnimating = false
+        animationTimer?.invalidate()
+        animationTimer = nil
     }
     
     private func findClosestIndex(for date: Date, in timestamps: [Date]) -> Int {
@@ -479,12 +506,6 @@ struct MapSection: View {
         }
         
         return lastValidIndex
-    }
-    
-    private func pauseAnimation() {
-        isAnimating = false
-        animationTimer?.invalidate()
-        animationTimer = nil
     }
     
     private func resetAnimation() {

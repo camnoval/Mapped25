@@ -35,31 +35,35 @@ struct ContentView: View {
                             }
                         }
                 } else {
-                    VStack(spacing: 0) {
+                    ZStack {
+                        // Feature content (full screen)
                         if let feature = selectedFeature {
                             featureView(for: feature)
                         }
                         
-                        //ONLY show back button if NOT viewing Your Story
-                        if selectedFeature != "YourStory" {
-                            Spacer(minLength: 0)
-                            Button(action: {
-                                if selectedFeature == "Map" {
-                                    resetMapState()
+                        // Back button overlaid at bottom (NOT for YourStory or Constellation)
+                        if selectedFeature != "YourStory" && selectedFeature != "Constellation" {
+                            VStack {
+                                Spacer()
+                                
+                                Button(action: {
+                                    if selectedFeature == "Map" {
+                                        resetMapState()
+                                    }
+                                    selectedFeature = nil
+                                    isHomeMenu = true
+                                }) {
+                                    HStack {
+                                        Image(systemName: "chevron.left")
+                                        Text("Back to Home")
+                                    }
+                                    .foregroundColor(.white)
+                                    .padding(.vertical, 16)
+                                    .frame(maxWidth: .infinity)
+                                    .background(Color.blue)
                                 }
-                                selectedFeature = nil
-                                isHomeMenu = true
-                            }) {
-                                HStack {
-                                    Image(systemName: "chevron.left")
-                                    Text("Back to Home")
-                                }
-                                .foregroundColor(.white)
-                                .padding(.vertical, 16)
-                                .frame(maxWidth: .infinity)
-                                .background(Color.blue)
                             }
-                            .edgesIgnoringSafeArea(.bottom)
+                            .ignoresSafeArea(edges: .bottom)
                         }
                     }
                 }
@@ -236,7 +240,11 @@ struct ContentView: View {
                 rotation: $sharedConstellationRotation,
                 backgroundStars: $sharedConstellationBackgroundStars,
                 stars: $sharedConstellationStars,
-                connections: $sharedConstellationConnections
+                connections: $sharedConstellationConnections,
+                onDismiss: {
+                    selectedFeature = nil
+                    isHomeMenu = true
+                }
             )
             .id(photoLoader.locations.count)
             .onAppear {

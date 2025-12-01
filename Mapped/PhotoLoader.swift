@@ -42,6 +42,9 @@ class PhotoLoader: ObservableObject {
     @Published var totalActualDistance: Double = 0.0
     @Published var distancesTraveled: [Double] = []
     
+    //Use diff years if no 2025 images
+    @Published var photosYear: Int = 0
+    
     private let minimumDistance: Double = 1609.34 // 1 mile in meters
     private var cancellables = Set<AnyCancellable>()
     
@@ -179,6 +182,10 @@ class PhotoLoader: ObservableObject {
     }
     
     private func fetchPhotosFromLibrary() {
+        // Create a serial queue for thread-safe progress updates
+        let progressQueue = DispatchQueue(label: "com.mapped.progressQueue")
+        var lastReportedProgress: Double = 0.0
+        
         DispatchQueue.main.async {
             self.isLoading = true
             self.loadingProgress = 0.0
@@ -189,31 +196,84 @@ class PhotoLoader: ObservableObject {
             guard let self = self else { return }
             
             let fetchOptions = PHFetchOptions()
-            
             let calendar = Calendar.current
-            let currentYear = debugYear ?? calendar.component(.year, from: Date())
             
-            var startComponents = DateComponents()
-            startComponents.year = currentYear
-            startComponents.month = 1
-            startComponents.day = 1
-            startComponents.hour = 0
-            startComponents.minute = 0
-            startComponents.second = 0
+            // ✅ Helper function to try a specific year
+            func tryYear(_ year: Int) -> (count: Int, startDate: Date?, endDate: Date?) {
+                var startComponents = DateComponents()
+                startComponents.year = year
+                startComponents.month = 1
+                startComponents.day = 1
+                startComponents.hour = 0
+                startComponents.minute = 0
+                startComponents.second = 0
+                
+                var endComponents = DateComponents()
+                endComponents.year = year
+                endComponents.month = 12
+                endComponents.day = 31
+                endComponents.hour = 23
+                endComponents.minute = 59
+                endComponents.second = 59
+                
+                guard let startDate = calendar.date(from: startComponents),
+                      let endDate = calendar.date(from: endComponents) else {
+                    return (0, nil, nil)
+                }
+                
+                fetchOptions.predicate = NSPredicate(
+                    format: "creationDate >= %@ AND creationDate <= %@",
+                    startDate as CVarArg,
+                    endDate as CVarArg
+                )
+                fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
+                
+                let assets = PHAsset.fetchAssets(with: .image, options: fetchOptions)
+                return (assets.count, startDate, endDate)
+            }
             
-            var endComponents = DateComponents()
-            endComponents.year = currentYear
-            endComponents.month = 12
-            endComponents.day = 31
-            endComponents.hour = 23
-            endComponents.minute = 59
-            endComponents.second = 59
+            // ✅ Try current year first, then fall back
+            var currentYear = self.debugYear ?? calendar.component(.year, from: Date())
+            var result = tryYear(currentYear)
+            var totalAssets = result.count
             
-            guard let startDate = calendar.date(from: startComponents),
-                  let endDate = calendar.date(from: endComponents) else {
+            if totalAssets == 0 && self.debugYear == nil {
+                // Try previous years
+                let yearsToTry = [2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011, 2010]
+                for year in yearsToTry {
+                    print("⚠️ No photos from \(currentYear), trying \(year)...")
+                    result = tryYear(year)
+                    totalAssets = result.count
+                    if totalAssets > 0 {
+                        currentYear = year
+                        print("✅ Found \(totalAssets) photos from \(year)")
+                        break
+                    }
+                }
+            }
+            
+            // ✅ Update the year being used
+            DispatchQueue.main.async {
+                self.photosYear = currentYear
+            }
+            
+            print("📸 Found \(totalAssets) total photos from \(currentYear)")
+            
+            guard totalAssets > 0, let startDate = result.startDate, let endDate = result.endDate else {
+                DispatchQueue.main.async {
+                    self.isLoading = false
+                    self.loadingProgress = 1.0
+                    self.locations = []
+                    self.photoTimeStamps = []
+                    self.thumbnails = []
+                    self.allPhotosAtLocation = []
+                    self.totalPhotosWithLocation = 0
+                    self.errorMessage = "No photos found. Add some photos with location data to get started!"
+                }
                 return
             }
             
+            // Update predicate with confirmed dates
             fetchOptions.predicate = NSPredicate(
                 format: "creationDate >= %@ AND creationDate <= %@",
                 startDate as CVarArg,
@@ -222,14 +282,16 @@ class PhotoLoader: ObservableObject {
             fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
             
             let assets = PHAsset.fetchAssets(with: .image, options: fetchOptions)
-            let totalAssets = assets.count
             
-            guard totalAssets > 0 else {
-                DispatchQueue.main.async {
-                    self.isLoading = false
-                    self.errorMessage = "No photos found from the last year."
+            // Thread-safe progress update helper
+            func updateProgress(_ progress: Double) {
+                progressQueue.async {
+                    guard progress > lastReportedProgress else { return }
+                    lastReportedProgress = progress
+                    DispatchQueue.main.async {
+                        self.loadingProgress = progress
+                    }
                 }
-                return
             }
             
             // NEW: Initialize batch processing with PersistenceManager
@@ -252,9 +314,8 @@ class PhotoLoader: ObservableObject {
             assets.enumerateObjects { asset, index, _ in
                 processedCount += 1
                 if processedCount % 10 == 0 {
-                    DispatchQueue.main.async {
-                        self.loadingProgress = Double(processedCount) / Double(totalAssets) * 0.6
-                    }
+                    let progress = Double(processedCount) / Double(totalAssets) * 0.6
+                    updateProgress(progress)
                 }
                 
                 guard let location = asset.location?.coordinate,
@@ -302,10 +363,12 @@ class PhotoLoader: ObservableObject {
                 tempLocationAssets.append(currentLocationAssets)
             }
             
-            // NEW: Batch load thumbnails directly to disk (no memory accumulation)
-            print("📦 Starting batch thumbnail processing for \(tempAssets.count) assets...")
-            self.batchLoadThumbnailsToDisk(assets: tempAssets) { success in
-                if !success {
+            print("🗺 Processed \(tempLocations.count) unique locations from \(photosWithLocationCount) photos")
+            
+            // Batch load thumbnails with progress tracking
+            print("🖼️ Starting thumbnail batch processing...")
+            self.batchLoadThumbnailsToDisk(assets: tempAssets, updateProgress: updateProgress) { success in
+                guard success else {
                     DispatchQueue.main.async {
                         self.isLoading = false
                         self.errorMessage = "Failed to cache thumbnails"
@@ -313,13 +376,11 @@ class PhotoLoader: ObservableObject {
                     return
                 }
                 
-                DispatchQueue.main.async {
-                    self.loadingProgress = 0.8
-                }
+                updateProgress(0.8)
                 
-                print("📦 Starting batch allPhotos processing for \(tempLocationAssets.count) locations...")
-                self.batchLoadAllPhotosToDisk(locationAssets: tempLocationAssets) { success in
-                    if !success {
+                print("📚 Starting location photos batch processing...")
+                self.batchLoadAllPhotosToDisk(locationAssets: tempLocationAssets, updateProgress: updateProgress) { success in
+                    guard success else {
                         DispatchQueue.main.async {
                             self.isLoading = false
                             self.errorMessage = "Failed to cache photos"
@@ -333,6 +394,7 @@ class PhotoLoader: ObservableObject {
                         locationStructure: locationStructure
                     )
                     
+                    // ✅ CRITICAL: Update ALL state on main thread ATOMICALLY
                     DispatchQueue.main.async {
                         self.locations = tempLocations
                         self.photoTimeStamps = tempTimestamps
@@ -342,20 +404,25 @@ class PhotoLoader: ObservableObject {
                         self.totalActualDistance = totalActualDistance
                         self.totalPhotosWithLocation = photosWithLocationCount
                         
-                        // Load placeholder arrays (we'll load images on-demand later)
+                        // Create placeholder arrays
                         self.thumbnails = Array(repeating: self.createPlaceholderImage(), count: tempAssets.count)
                         self.allPhotosAtLocation = tempLocationAssets.map { assets in
                             Array(repeating: self.createPlaceholderImage(), count: assets.count)
                         }
                         
+                        // ✅ Set progress to 1.0 BEFORE marking as complete
                         self.loadingProgress = 1.0
-                        self.isLoading = false
                         
-                        // Save user data
-                        self.saveUserData()
-                        self.preparePhotosForVideo()
-                        
-                        print("✅ Completed photo loading with batch disk caching")
+                        // ✅ Small delay to ensure UI sees 100%
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            self.isLoading = false
+                            
+                            // Save and prepare
+                            self.saveUserData()
+                            self.preparePhotosForVideo()
+                            
+                            print("✅ Photo loading complete: \(tempLocations.count) locations from \(currentYear)")
+                        }
                     }
                 }
             }
@@ -365,9 +432,10 @@ class PhotoLoader: ObservableObject {
     // NEW: Batch load thumbnails directly to disk
     private func batchLoadThumbnailsToDisk(
         assets: [PHAsset],
+        updateProgress: @escaping (Double) -> Void,
         completion: @escaping (Bool) -> Void
     ) {
-        let batchSize = 50 // Process 50 images at a time
+        let batchSize = 50
         let imageManager = PHImageManager.default()
         let options = PHImageRequestOptions()
         options.isSynchronous = false
@@ -408,16 +476,13 @@ class PhotoLoader: ObservableObject {
             }
             
             dispatchGroup.notify(queue: .global(qos: .userInitiated)) {
-                // Write this batch to disk immediately
                 autoreleasepool {
                     PersistenceManager.shared.saveThumbnailBatch(batchImages)
                 }
                 
                 // Update progress
                 let progress = 0.6 + (0.2 * Double(endIndex) / Double(assets.count))
-                DispatchQueue.main.async {
-                    self.loadingProgress = progress
-                }
+                updateProgress(progress)
                 
                 // Process next batch
                 processBatch(startIndex: endIndex)
@@ -430,6 +495,7 @@ class PhotoLoader: ObservableObject {
     // NEW: Batch load all photos at location directly to disk
     private func batchLoadAllPhotosToDisk(
         locationAssets: [[PHAsset]],
+        updateProgress: @escaping (Double) -> Void,
         completion: @escaping (Bool) -> Void
     ) {
         let imageManager = PHImageManager.default()
@@ -469,7 +535,6 @@ class PhotoLoader: ObservableObject {
             }
             
             dispatchGroup.notify(queue: .global(qos: .userInitiated)) {
-                // Write this location's photos to disk immediately
                 autoreleasepool {
                     PersistenceManager.shared.saveLocationPhotosBatch(
                         locationIndex: locationIndex,
@@ -479,9 +544,7 @@ class PhotoLoader: ObservableObject {
                 
                 // Update progress
                 let progress = 0.8 + (0.2 * Double(locationIndex + 1) / Double(locationAssets.count))
-                DispatchQueue.main.async {
-                    self.loadingProgress = progress
-                }
+                updateProgress(progress)
                 
                 // Process next location
                 processLocation(locationIndex: locationIndex + 1)

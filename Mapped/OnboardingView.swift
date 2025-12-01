@@ -422,6 +422,14 @@ struct PhotoLoadingScreen: View {
                             .id(loadingPhase)
                             .transition(.opacity)
                         
+                        if photoLoader.photosYear > 0 && photoLoader.photosYear != Calendar.current.component(.year, from: Date()) {
+                            Text("No \(String(Calendar.current.component(.year, from: Date()))) photos found. Loading \(String(photoLoader.photosYear)) photos, the most recent year available.")
+                                .font(.caption)
+                                .foregroundColor(.yellow.opacity(0.9))
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 30)
+                        }
+                        
                         ProgressView(value: displayProgress)
                             .progressViewStyle(LinearProgressViewStyle(tint: .white))
                             .frame(width: 250)
@@ -455,46 +463,103 @@ struct PhotoLoadingScreen: View {
             }
         }
         .onAppear {
+            print("🎬 PhotoLoadingScreen appeared")
             startFakeProgress()
             loadPhotos()
             startFailsafeTimer()
         }
         .onDisappear {
+            print("🎬 PhotoLoadingScreen disappeared")
             progressTimer?.invalidate()
             failsafeTimer?.invalidate()
         }
         .onChange(of: displayProgress) { newValue in
             updateLoadingPhase(progress: newValue)
         }
+        // ✅ FIXED: Only trigger on completion, not on intermediate states
         .onChange(of: photoLoader.isLoading) { isLoading in
-            if !isLoading {
-                checkAndTransition()
-            }
-        }
-        .onChange(of: photoLoader.locations.count) { newValue in
-            if newValue > 0 {
-                checkAndTransition()
+            if !isLoading && photoLoader.loadingProgress >= 0.99 {
+                print("✅ Loading complete, building constellation")
+                buildConstellationForCarousel()
+                
+                // Wait for constellation to build before transitioning
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    self.checkAndTransition()
+                }
             }
         }
     }
     
+    // Helper Functions
+    
+    private func buildConstellationForCarousel() {
+        guard constellationStars.isEmpty && !photoLoader.locations.isEmpty else { return }
+        
+        print("🌟 Pre-building constellation for carousel...")
+        
+        let buildSize = CGSize(width: 600, height: 600)
+        
+        let constellation = ConstellationBuilder.buildConstellation(
+            locations: photoLoader.locations,
+            viewSize: buildSize
+        )
+        
+        constellationStars = constellation.stars
+        constellationConnections = constellation.connections
+        
+        print("✅ Pre-built \(constellation.stars.count) stars for carousel")
+    }
+    
     private func startFailsafeTimer() {
-        failsafeTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
-            if !hasTriggeredTransition {
-                print("⚠️ FAILSAFE: Forcing transition after 5 seconds if photos not loading anymore, loop")
-                checkAndTransition()
+        failsafeTimer?.invalidate()
+        
+        var checksWithoutProgress = 0
+        var lastProgress: Double = 0.0
+        
+        failsafeTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in  // ✅ Removed [weak self]
+            let currentProgress = self.displayProgress
+            
+            // Check if progress is stuck
+            if abs(currentProgress - lastProgress) < 0.001 {
+                checksWithoutProgress += 1
+            } else {
+                checksWithoutProgress = 0
+            }
+            lastProgress = currentProgress
+            
+            print("🔍 FAILSAFE: progress=\(currentProgress), stuck=\(checksWithoutProgress), isLoading=\(self.photoLoader.isLoading), locations=\(self.photoLoader.locations.count)")
+            
+            if !self.hasTriggeredTransition {
+                // Force transition if:
+                // 1. Stuck at same progress for 5+ seconds
+                // 2. At 100% and loading complete
+                // 3. Has locations and loading complete
+                // 4. Has error message
+                
+                let stuckTooLong = checksWithoutProgress >= 5
+                let atComplete = currentProgress >= 0.99 && !self.photoLoader.isLoading
+                let hasData = self.photoLoader.locations.count > 0 && !self.photoLoader.isLoading
+                let hasError = self.photoLoader.errorMessage != nil
+                
+                if stuckTooLong || atComplete || hasData || hasError {
+                    print("⚠️ FAILSAFE TRIGGERED: stuck=\(stuckTooLong), complete=\(atComplete), data=\(hasData), error=\(hasError)")
+                    self.checkAndTransition()
+                }
             }
         }
     }
     
     private func checkAndTransition() {
-        guard !hasTriggeredTransition else { return }
+        guard !hasTriggeredTransition else {
+            print("⏭️ Transition already triggered, skipping")
+            return
+        }
         
         let shouldTransition = !photoLoader.isLoading &&
-                              (photoLoader.locations.count > 0 || displayProgress >= 0.99)
+                              (photoLoader.locations.count > 0 || displayProgress >= 0.99 || photoLoader.errorMessage != nil)
         
         if shouldTransition {
-            print("🎯 Triggering transition: locations=\(photoLoader.locations.count), progress=\(displayProgress)")
+            print("🎯 Triggering transition: locations=\(photoLoader.locations.count), progress=\(displayProgress), error=\(photoLoader.errorMessage != nil)")
             hasTriggeredTransition = true
             
             progressTimer?.invalidate()
@@ -506,7 +571,7 @@ struct PhotoLoadingScreen: View {
             
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 withAnimation(.spring(response: 0.6)) {
-                    showCarousel = true
+                    self.showCarousel = true
                 }
             }
         }
